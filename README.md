@@ -77,9 +77,9 @@ python cli.py Pedigrees/D01.csv --mu 0.1 --out results.csv
 ```
 
 Arguments:
-- `PEDIGREE_CSV` — path to the input pedigree CSV file.
-- `--mu` — mutation rate per meiosis (default: `0.1`).
-- `--out` — optional path to write results as CSV instead of only printing them.
+- `PEDIGREE_CSV` - path to the input pedigree CSV file.
+- `--mu` - mutation rate per meiosis (default: `0.1`).
+- `--out` - optional path to write results as CSV instead of only printing them.
 
 For each locus found in the file, the CLI prints the average match
 probability across all untyped males, plus the per-male match
