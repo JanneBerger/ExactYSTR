@@ -5,7 +5,7 @@ pedigree, using the Elston-Stewart algorithm.
 
 Given a pedigree with a typed suspect and one or more relatives who are
 untyped (missing) at a locus, this tool computes, for each untyped male, the
-probability that he carries the suspect's allele — exactly, without Monte
+probability that he carries the suspect's allele - exactly, without Monte
 Carlo simulation, accounting for mutation between generations.
 
 ## Background
