@@ -33,7 +33,6 @@ where mu is the locus-specific mutation rate per meiosis.
 from __future__ import annotations
  
 import csv
-import sys
 from dataclasses import dataclass, field
 from typing import Callable
  
@@ -153,167 +152,8 @@ def make_stepwise_mutation_model(mu: float) -> Callable[[int, int], float]:
  
  
 # ---------------------------------------------------------------------------
-# Pedigree structure helpers
-# ---------------------------------------------------------------------------
- 
-def _build_struct(
-    males: list[Male],
-) -> tuple[int, list[int], Callable[[int, int], int]]:
-    """Build internal index structures for the pedigree tree."""
-    n         = len(males)
-    id_to_idx = {m.male_id: i for i, m in enumerate(males)}
-    sons: dict[int, list[int]] = {i: [] for i in range(n)}
- 
-    for i, m in enumerate(males):
-        if m.father_id in id_to_idx:
-            sons[id_to_idx[m.father_id]].append(i)
- 
-    ns = [len(sons[i]) for i in range(n)]
- 
-    def id_son(i: int, j: int) -> int:
-        return sons[i][j - 1]
- 
-    return n, ns, id_son
- 
- 
-# ---------------------------------------------------------------------------
 # Core algorithm
 # ---------------------------------------------------------------------------
- 
-def compute_pedigree_probability(
-    males:  list[Male],
-    locus:  str,
-    a:      list[int],
-    mu:     float = DEFAULT_MU,
-    minall: int   = MINALL,
-    maxall: int   = MAXALL,
-) -> float:
-    """Compute the likelihood of the observed allele configuration.
- 
-    Uses the Elston-Stewart backward induction. For each male i and
-    allele k, beta[i][k] is the probability of the allele configuration
-    in the subtree rooted at i, conditional on i carrying allele k.
- 
-    Parameters
-    ----------
-    males:
-        Pedigree members, sorted by (generation, male_id).
-    locus:
-        Locus name (informational only; alleles are passed via *a*).
-    a:
-        Allele assignment vector (same order as *males*).
-        0 encodes an untyped individual.
-    mu:
-        Mutation rate per meiosis (default: DEFAULT_MU).
-    minall, maxall:
-        Inclusive allele range (default: MINALL, MAXALL).
- 
-    Returns
-    -------
-    float
-        P(observed data | a[0]) — the likelihood at the root allele.
-    """
-    sys.setrecursionlimit(max(sys.getrecursionlimit(), 10 * len(males)))
- 
-    n, ns, id_son = _build_struct(males)
-    p             = make_stepwise_mutation_model(mu)
-    allele_range  = range(minall, maxall + 1)
- 
-    def idx(x: int) -> int:
-        return x - minall
- 
-    A    = maxall - minall + 1
-    b    = [[0.0] * A for _ in range(n)]
-    done = [False]     * n
- 
-    def rec(i: int) -> None:
-        if done[i]:
-            return
-        for j in range(1, ns[i] + 1):
-            rec(id_son(i, j))
- 
-        if ns[i] == 0:
-            if a[i] == 0:
-                for k in allele_range:
-                    b[i][idx(k)] = 1.0
-            else:
-                b[i][idx(a[i])] = 1.0
-        else:
-            for k in allele_range:
-                if a[i] != 0 and a[i] != k:
-                    continue
-                val = 1.0
-                for j in range(1, ns[i] + 1):
-                    son   = id_son(i, j)
-                    inner = 0.0
-                    lo    = max(minall, k - 1)
-                    hi    = min(maxall, k + 1)
-                    for ll in range(lo, hi + 1):
-                        if a[son] == 0 or a[son] == ll:
-                            inner += p(k, ll) * b[son][idx(ll)]
-                    val *= inner
-                b[i][idx(k)] = val
-        done[i] = True
- 
-    rec(0)
-    return b[0][idx(a[0])]
- 
- 
-def compute_match_probs(
-    males:  list[Male],
-    locus:  str,
-    mu:     float = DEFAULT_MU,
-    minall: int   = MINALL,
-    maxall: int   = MAXALL,
-) -> tuple[dict[int, float], float]:
-    """Compute match probabilities for all untyped males at one locus.
- 
-    For each untyped male i, the match probability is
- 
-        MP_i = P(data | male i has suspect allele) / P(data)
- 
-    Parameters
-    ----------
-    males:
-        Pedigree members sorted by (generation, male_id).
-    locus:
-        Locus name.
-    mu:
-        Mutation rate per meiosis (default: DEFAULT_MU).
-    minall, maxall:
-        Inclusive allele range (default: MINALL, MAXALL).
- 
-    Returns
-    -------
-    match_probs : dict[int, float]
-        Maps individual index -> match probability.
-        Only untyped males are included.
-    average : float
-        Average match probability over all untyped males.
-        Returns 0.0 if suspect is untyped or no untyped males exist.
-    """
-    base    = [m.alleles.get(locus, 0) for m in males]
-    suspect = base[0]
- 
-    if suspect == 0:
-        return {}, 0.0
- 
-    P1 = compute_pedigree_probability(males, locus, base.copy(), mu, minall, maxall)
-    if P1 == 0.0:
-        return {}, 0.0
- 
-    match_probs: dict[int, float] = {}
- 
-    for i, allele in enumerate(base):
-        if allele == 0:
-            test    = base.copy()
-            test[i] = suspect
-            P2      = compute_pedigree_probability(males, locus, test, mu, minall, maxall)
-            match_probs[i] = P2 / P1
- 
-    average = sum(match_probs.values()) / len(match_probs) if match_probs else 0.0
-    return match_probs, average
-
 
 def compute_match_probs_fast(
     males:  list[Male],
@@ -324,28 +164,46 @@ def compute_match_probs_fast(
 ) -> tuple[dict[int, float], float]:
     """Compute match probabilities for all untyped males at one locus.
 
-    Numerically equivalent to :func:`compute_match_probs`, but avoids its
-    O(u) re-peels of the full tree (one per untyped male, each one costing
-    more as u grows) by running a two-pass inside-outside sweep instead.
+    For each untyped male i, the match probability is
 
-    The "inside" pass computes ``beta[i][k]`` exactly like the ``b`` array
-    in :func:`compute_pedigree_probability` (bottom-up: the likelihood of
-    the subtree rooted at i, given i carries allele k). A second
-    "outside" pass computes ``alpha[i][k]`` top-down: the combined
-    likelihood contribution of everything *not* in i's subtree (ancestors
-    and sibling subtrees), given i carries allele k. For any untyped male
-    j and candidate allele s:
+        MP_i = P(data | male i has suspect allele) / P(data)
+
+    Uses a two-pass Elston-Stewart inside-outside sweep so that every
+    untyped male's match probability is obtained in O(n*A) total, instead
+    of re-peeling the whole tree once per untyped male.
+
+    The "inside" pass computes ``beta[i][k]`` bottom-up: the likelihood of
+    the subtree rooted at i, given i carries allele k. A second "outside"
+    pass computes ``alpha[i][k]`` top-down: the combined likelihood
+    contribution of everything *not* in i's subtree (ancestors and sibling
+    subtrees), given i carries allele k. For any untyped male j and
+    candidate allele s:
 
         P(all data AND j = s) = alpha[j][s] * beta[j][s]
 
     so every match probability is read off in O(1) once both O(n*A)
-    passes are done, giving O(n*A) total instead of O(u*n*A).
+    passes are done.
 
-    Parameters and return value are identical to
-    :func:`compute_match_probs`. Like that function (and like
-    ``load_pedigree_from_csv``'s contract), this assumes ``males`` is
-    sorted by (generation, male_id) — a father always appears before its
-    sons.
+    Parameters
+    ----------
+    males:
+        Pedigree members sorted by (generation, male_id). A father must
+        always appear before its sons (see ``load_pedigree_from_csv``).
+    locus:
+        Locus name.
+    mu:
+        Mutation rate per meiosis (default: DEFAULT_MU).
+    minall, maxall:
+        Inclusive allele range (default: MINALL, MAXALL).
+
+    Returns
+    -------
+    match_probs : dict[int, float]
+        Maps individual index -> match probability.
+        Only untyped males are included.
+    average : float
+        Average match probability over all untyped males.
+        Returns 0.0 if suspect is untyped or no untyped males exist.
     """
     base    = [m.alleles.get(locus, 0) for m in males]
     suspect = base[0]
