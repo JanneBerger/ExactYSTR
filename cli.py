@@ -10,7 +10,7 @@ Usage
     python cli.py pedigree.csv [--mu 0.1] [--out results.csv]
 
 The pedigree CSV must contain columns:
-    male_id, generation, father_id, allel_<LOCUS>, ...
+    male_id, generation, father_id, allele_<LOCUS>, ...
 
 See examples/example_pedigree.csv for the expected format.
 All loci use a fixed allele range of [3, 30].
