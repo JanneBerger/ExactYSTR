@@ -84,7 +84,7 @@ def load_pedigree_from_csv(filepath: str) -> tuple[list[Male], list[str]]:
     male_id     : int  — unique individual ID
     generation  : int  — 0-based generation (0 = suspect / MRCA)
     father_id   : int  — father's male_id; use -1 (or any absent ID) for root
-    allel_<LOC> : int  — allele at locus LOC; 0 = untyped
+    allele_<LOC> : int  — allele at locus LOC; 0 = untyped
  
     Returns
     -------
@@ -102,9 +102,9 @@ def load_pedigree_from_csv(filepath: str) -> tuple[list[Male], list[str]]:
             raise ValueError(f"Empty or malformed CSV: {filepath}")
  
         loci = [
-            col.replace("allel_", "")
+            col.replace("allele_", "")
             for col in reader.fieldnames
-            if col.startswith("allel_")
+            if col.startswith("allele_")
         ]
  
         for row in reader:
@@ -113,9 +113,9 @@ def load_pedigree_from_csv(filepath: str) -> tuple[list[Male], list[str]]:
                 generation = int(row["generation"]),
                 father_id  = int(row["father_id"]),
                 alleles    = {
-                    col.replace("allel_", ""): int(val)
+                    col.replace("allele_", ""): int(val)
                     for col, val in row.items()
-                    if col.startswith("allel_")
+                    if col.startswith("allele_")
                 },
             ))
  

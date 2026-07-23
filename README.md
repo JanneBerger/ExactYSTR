@@ -55,13 +55,13 @@ Each pedigree is a CSV file with one row per male:
 | `male_id` | Unique integer identifier. |
 | `generation` | 0-based generation index (0 = suspect / most recent common ancestor). |
 | `father_id` | `male_id` of the father, or `-1` for the root. |
-| `allel_<LOCUS>` | Allele value at locus `LOCUS`. Use `0` for an untyped individual. Add one such column per locus. |
+| `allele_<LOCUS>` | Allele value at locus `LOCUS`. Use `0` for an untyped individual. Add one such column per locus. |
 
 Example (`Pedigrees/D01.csv`), a single locus `M1` with two untyped males
 between the suspect and a typed descendant:
 
 ```csv
-male_id,generation,father_id,allel_M1
+male_id,generation,father_id,allele_M1
 1,0,-1,13
 2,1,1,0
 3,2,2,0
