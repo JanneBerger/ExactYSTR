@@ -40,7 +40,7 @@ are integers in a fixed range (default `[3, 30]`).
 
 | File | Description |
 |---|---|
-| `ystr_pedigree.py` | Core algorithm: pedigree data structures, CSV loading, mutation model, and both `compute_match_probs` (reference implementation) and `compute_match_probs_fast` (linear-time inside-outside version). |
+| `ystr_pedigree.py` | Core algorithm: pedigree data structures, CSV loading, mutation model, and `compute_match_probs_fast` (linear-time inside-outside version). |
 | `cli.py` | Command-line interface for running the calculator on a pedigree CSV file. |
 | `runtime_analysis.py` | Empirical runtime benchmarking script that measures how `compute_match_probs_fast` scales with pedigree size, number of untyped males, allele range, and number of loci, and plots the results. |
 | `Pedigrees/` | Example pedigree CSV files (`A01.csv` … `E02.csv`). |
@@ -97,8 +97,7 @@ for i, prob in match_probs.items():
     print(males[i].male_id, prob)
 ```
 
-`compute_match_probs_fast` is numerically equivalent to
-`compute_match_probs` but computes all match probabilities for a locus in
+`compute_match_probs_fast` computes all match probabilities for a locus in
 a single linear-time inside-outside sweep, instead of re-peeling the whole
 tree once per untyped male.
 
