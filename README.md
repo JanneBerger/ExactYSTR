@@ -84,22 +84,6 @@ For each locus found in the file, the CLI prints the average match
 probability across all untyped males, plus the per-male match
 probability.
 
-### As a library
-
-```python
-from ystr_pedigree import load_pedigree_from_csv, compute_match_probs_fast
-
-males, loci = load_pedigree_from_csv("Pedigrees/D01.csv")
-match_probs, average = compute_match_probs_fast(males, "M1", mu=0.1)
-
-for i, prob in match_probs.items():
-    print(males[i].male_id, prob)
-```
-
-`compute_match_probs_fast` computes all match probabilities for a locus in
-a single linear-time inside-outside sweep, instead of re-peeling the whole
-tree once per untyped male.
-
 ### Runtime analysis
 
 ```bash
