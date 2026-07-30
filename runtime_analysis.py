@@ -36,7 +36,6 @@ Output:
 import sys
 import time
 import random
-import platform
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -358,14 +357,6 @@ def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A, Ls, res_L,
                ncol=3,
                fontsize=9,
                frameon=False)
-
-    fig.text(0.5, -0.02,
-             f"Mean ± std over {N_SEEDS} untyped-placements  ·  "
-             f"{REPEATS} timing replicates each  ·  "
-             f"Python {platform.python_version()}  ·  "
-             f"{platform.processor() or platform.machine()}  ·  "
-             f"$\\mu$ = {MU}",
-             ha="center", fontsize=7.5, color="gray")
 
     base = "runtime_analysis"
     for ext in ("png", "pdf", "svg"):
