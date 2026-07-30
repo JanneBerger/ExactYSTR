@@ -29,7 +29,8 @@ Dependencies: numpy, matplotlib
 Usage:
     python runtime_analysis.py
 Output:
-    runtime_analysis.png  (publication-quality 4-panel figure)
+    runtime_analysis.png/.pdf/.svg  (publication-quality 4-panel figure,
+    raster + vector formats)
 """
 
 import sys
@@ -366,9 +367,11 @@ def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A, Ls, res_L,
              f"$\\mu$ = {MU}",
              ha="center", fontsize=7.5, color="gray")
 
-    out = "runtime_analysis.png"
-    plt.savefig(out, dpi=350, bbox_inches="tight")
-    print(f"\nFigure saved: {out}")
+    base = "runtime_analysis"
+    for ext in ("png", "pdf", "svg"):
+        out = f"{base}.{ext}"
+        plt.savefig(out, dpi=350, bbox_inches="tight")
+        print(f"Figure saved: {out}")
     plt.show()
 
 
