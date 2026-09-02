@@ -3,14 +3,23 @@ name = "ystr_rust"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
-name = "ystr_rust"
-path = "src/main.rs"
+name = "ystr_cli"
+path = "src/bin/cli.rs"
+
+[[bin]]
+name = "ystr_analysis"
+path = "src/bin/runtime_analysis.rs"
 
 [dependencies]
-rand = { version = "0.8", features = ["small_rng"] }
-serde = { version = "1.0", features = ["derive"] }
+csv     = "1"
+rand    = { version = "0.8", features = ["small_rng"] }
+serde   = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+clap    = { version = "4", features = ["derive"] }
 
 [profile.release]
 opt-level = 3
