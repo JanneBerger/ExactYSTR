@@ -84,6 +84,7 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
 
     rows: list[dict] = []
     n_loci_used = 0
+    total_elapsed = 0.0
 
     for locus in loci:
         c = _infer_copies(males, locus)
@@ -96,6 +97,7 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
         t0 = time.perf_counter()
         match_probs, average = compute_match_probs_fast(males, locus, lmu1, mu2=lmu2)
         elapsed = time.perf_counter() - t0
+        total_elapsed += elapsed
 
         if not match_probs:
             print(f"[{locus}]  suspect untyped or no untyped males — skipped")
@@ -122,7 +124,8 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
         print()
 
     if n_loci_used > 1 and combined:
-        print(f"=== Combined MP (product over {n_loci_used} loci) ===")
+        tot_str = f"{total_elapsed*1000:.1f} ms" if total_elapsed < 1 else f"{total_elapsed:.3f} s"
+        print(f"=== Combined MP (product over {n_loci_used} loci, total {tot_str}) ===")
         for male_id, mp in sorted(combined.items(), key=lambda x: male_meta[x[0]]):
             gen = male_meta[male_id]
             print(f"    male_id={male_id}  gen={gen}  combined_MP={mp:.6e}")
