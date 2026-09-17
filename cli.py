@@ -14,6 +14,10 @@ The pedigree CSV must contain columns:
 
 See examples/example_pedigree.csv for the expected format.
 All loci use a fixed allele range of [3, 30].
+
+--mu is always the per-copy mutation rate (mu_pc).  For multi-copy loci
+the per-locus rate mu_all = 1-(1-mu)^c is derived automatically and shown
+in the console output.
 """
 
 import argparse
@@ -22,9 +26,9 @@ import sys
 
 from ystr_pedigree import (
     DEFAULT_MU,
-    DEFAULT_MU2,
     MINALL,
     MAXALL,
+    _infer_copies,
     compute_match_probs_fast,
     load_pedigree_from_csv,
 )
@@ -44,7 +48,11 @@ def parse_args() -> argparse.Namespace:
         "--mu",
         type=float,
         default=DEFAULT_MU,
-        help="One-step mutation rate per meiosis.",
+        help=(
+            "Per-copy mutation rate (mu_pc). For multi-copy loci the "
+            "per-locus rate mu_all = 1-(1-mu)^c is derived automatically. "
+            "Default: %(default)s."
+        ),
     )
     parser.add_argument(
         "--two-step-frac",
@@ -63,17 +71,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | None) -> None:
-    mu1 = mu * (1.0 - two_step_frac)
-    mu2 = mu * two_step_frac
-
     males, loci = load_pedigree_from_csv(pedigree_path)
     print(f"Loaded {len(males)} males, {len(loci)} loci from '{pedigree_path}'")
-    print(f"Mutation rate:  mu = {mu}")
+    print(f"Mutation rate:  mu = {mu}  (per copy)")
     if two_step_frac:
-        print(f"Two-step fraction: {two_step_frac}  →  mu1 = {mu1:.6g}, mu2 = {mu2:.6g}")
+        print(f"Two-step fraction: {two_step_frac}")
     print(f"Allele range:  [{MINALL}, {MAXALL}]\n")
 
-    # male_id → (generation, running product of per-locus MPs)
     male_meta: dict[int, int] = {m.male_id: m.generation for m in males}
     combined: dict[int, float] = {}
 
@@ -81,14 +85,25 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
     n_loci_used = 0
 
     for locus in loci:
-        match_probs, average = compute_match_probs_fast(males, locus, mu1, mu2=mu2)
+        c = _infer_copies(males, locus)
+
+        # mu is per-copy; derive per-locus all-copy rate for this locus
+        mu_all = 1.0 - (1.0 - mu) ** c
+        lmu1 = mu_all * (1.0 - two_step_frac)
+        lmu2 = mu_all * two_step_frac
+
+        match_probs, average = compute_match_probs_fast(males, locus, lmu1, mu2=lmu2)
 
         if not match_probs:
             print(f"[{locus}]  suspect untyped or no untyped males — skipped")
             continue
 
         n_loci_used += 1
-        print(f"[{locus}]  average MP = {average:.6f}")
+        if c > 1:
+            print(f"[{locus}]  {c} copies  →  mu_all = {mu_all:.6g} (= 1-(1-{mu})^{c})")
+            print(f"    average MP = {average:.6f}")
+        else:
+            print(f"[{locus}]  average MP = {average:.6f}")
         for i, prob in match_probs.items():
             male_id = males[i].male_id
             gen     = males[i].generation
@@ -115,7 +130,6 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
-            # append combined MPs as a pseudo-locus row
             if n_loci_used > 1:
                 writer.writerows([
                     {
