@@ -81,7 +81,7 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
     n_loci_used = 0
 
     for locus in loci:
-        match_probs, average = compute_match_probs_fast(males, locus, mu1, mu2)
+        match_probs, average = compute_match_probs_fast(males, locus, mu1, mu2=mu2)
 
         if not match_probs:
             print(f"[{locus}]  suspect untyped or no untyped males — skipped")
