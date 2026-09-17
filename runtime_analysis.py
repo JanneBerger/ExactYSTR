@@ -257,6 +257,37 @@ def experiment_L(Ls, n=50, u=25):
 
 
 # ---------------------------------------------------------------------------
+# Theoretical complexity
+# ---------------------------------------------------------------------------
+
+def print_complexity_summary():
+    """Print the theoretical time-complexity of the algorithm."""
+    print()
+    print("=" * 62)
+    print("  Theoretical complexity: O(n · c · A^c)  per locus")
+    print("  n = number of males in pedigree")
+    print("  c = number of copies  (1 = single-copy, 2 = DYS385, …)")
+    print("  A = allele window size (≈ 2·margin + observed allele range)")
+    print()
+    print("  Inside pass  : O(c · A^c)  per male")
+    print("  Outside pass : O(c · A^c)  per male   [same kernel, T symmetric]")
+    print("  Over n males : O(n · c · A^c)  total per locus")
+    print("  Over L loci  : O(L · n · c · A^c)  grand total")
+    print()
+    print("  Typical single-copy values (c=1, A=28):")
+    print(f"    {'n':>6}  {'ops/locus':>12}")
+    for n in (50, 100, 200, 500):
+        print(f"    {n:>6}  {n * 28:>12,}")
+    print()
+    print("  Multi-copy (c=2, A=12, window_margin=5):")
+    print(f"    {'n':>6}  {'A^c':>6}  {'ops/locus':>12}")
+    for n in (10, 50, 200):
+        print(f"    {n:>6}  {12**2:>6}  {n * 2 * 12**2:>12,}")
+    print("=" * 62)
+    print()
+
+
+# ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
 
@@ -268,13 +299,44 @@ def add_linear_fit(ax, xs, ys, color):
             "--", color=color, linewidth=1.2, alpha=0.6)
 
 
+def add_theory_line(ax, xs, results, theory_fn, label):
+    """Overlay a single scaled theoretical reference curve.
+
+    Fits one global scale factor k (least-squares, intercept=0) across
+    all topologies simultaneously, then draws k · theory_fn(x) as a
+    solid gray background line.
+    """
+    xs_arr = np.array(xs, dtype=float)
+    theo   = np.array([theory_fn(x) for x in xs_arr])
+
+    y_all = np.concatenate([np.array(results[name]) for name in TOPOLOGIES])
+    t_all = np.tile(theo, len(TOPOLOGIES))
+
+    denom = float(np.dot(t_all, t_all))
+    k     = float(np.dot(t_all, y_all)) / denom if denom > 0 else 1.0
+
+    x_fit = np.linspace(0, max(xs) * 1.05, 300)
+    y_fit = k * np.array([theory_fn(x) for x in x_fit])
+
+    ax.plot(x_fit, y_fit, "-", color="#aaaaaa", linewidth=2.5,
+            alpha=0.45, zorder=0, label=label)
+
+
 def plot_panel(ax, xs, results, stds, xlabel, panel_label,
-               show_legend=False, fixed_params="", y_zero_bottom=True):
+               fixed_params="", y_zero_bottom=True,
+               theory_fn=None, theory_label=""):
     """Render one panel of the figure.
 
     results/stds: dict[topology_name -> list[float]], mean and standard
     deviation of runtime across the N_SEEDS random untyped-placements
     drawn per data point.
+
+    theory_fn:
+        Optional callable x -> float giving the *shape* of the expected
+        scaling (e.g. ``lambda x: x`` for O(x)).  A single scale factor
+        is fitted to the data and a gray reference curve is overlaid.
+    theory_label:
+        Legend label for the reference curve (e.g. "theory: O(n)").
     """
     for name in TOPOLOGIES:
         ys  = results[name]
@@ -288,6 +350,9 @@ def plot_panel(ax, xs, results, stds, xlabel, panel_label,
                      elinewidth=0.8,
                      label=name)
         add_linear_fit(ax, xs, ys, COLORS[name])
+
+    if theory_fn is not None:
+        add_theory_line(ax, xs, results, theory_fn, theory_label)
 
     ax.set_xlabel(xlabel, fontsize=10)
     ax.set_ylabel("Runtime (ms)", fontsize=10)
@@ -310,8 +375,6 @@ def plot_panel(ax, xs, results, stds, xlabel, panel_label,
         ax.text(0.97, 0.05, fixed_params, transform=ax.transAxes,
                 fontsize=8, color="black", va="bottom", ha="right")
 
-    pass  # legend is drawn once outside all panels in make_figure
-
 
 def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A, Ls, res_L, std_L):
     plt.rcParams.update({
@@ -330,31 +393,38 @@ def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A, Ls, res_L,
     plot_panel(axes[0, 0], ns, res_n, std_n,
                xlabel="Pedigree size  $n_{tot}$",
                panel_label="a",
-               show_legend=True,
-               fixed_params="$n_{unt} = 30$,  $n_{all} = 28$,  $n_{loc} = 1$")
+               fixed_params="$n_{unt} = 30$,  $n_{all} = 28$,  $n_{loc} = 1$",
+               theory_fn=lambda x: x,
+               theory_label="theory: $O(n)$")
 
     plot_panel(axes[0, 1], us, res_u, std_u,
                xlabel="Number of untyped males  $n_{unt}$",
                panel_label="b",
                fixed_params="$n_{tot} = 200$,  $n_{all} = 28$,  $n_{loc} = 1$",
-               y_zero_bottom=False)
+               y_zero_bottom=False,
+               theory_fn=lambda x: 1.0,
+               theory_label="theory: $O(1)$")
 
     plot_panel(axes[1, 0], As, res_A, std_A,
                xlabel="Number of alleles  $n_{all}$",
                panel_label="c",
-               fixed_params="$n_{tot} = 200$,  $n_{unt} = 50$,  $n_{loc} = 1$")
+               fixed_params="$n_{tot} = 200$,  $n_{unt} = 50$,  $n_{loc} = 1$",
+               theory_fn=lambda x: x,
+               theory_label="theory: $O(A)$")
 
     plot_panel(axes[1, 1], Ls, res_L, std_L,
                xlabel="Number of loci  $n_{loc}$",
                panel_label="d",
-               fixed_params="$n_{tot} = 50$,  $n_{unt} = 25$,  $n_{all} = 28$")
+               fixed_params="$n_{tot} = 50$,  $n_{unt} = 25$,  $n_{all} = 28$",
+               theory_fn=lambda x: x,
+               theory_label="theory: $O(L)$")
 
-    # Single shared legend centered below all panels
+    # Shared legend: topology series + one theory entry (from panel a)
     handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels,
                loc="lower center",
                bbox_to_anchor=(0.5, 0.01),
-               ncol=3,
+               ncol=4,
                fontsize=9,
                frameon=False)
 
@@ -371,6 +441,8 @@ def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A, Ls, res_L,
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    print_complexity_summary()
+
     # Sweep parameters
     ns = [50, 75, 100, 125, 150, 175, 200, 250, 300, 350, 400, 450, 500]
     us = [1, 2, 5, 10, 20, 30, 50, 75, 100, 125, 150, 175, 199]
