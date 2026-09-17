@@ -60,7 +60,12 @@ def run(pedigree_path: str, mu: float, out_path: str | None) -> None:
     print(f"Mutation rate: mu = {mu}")
     print(f"Allele range:  [{MINALL}, {MAXALL}]\n")
 
+    # male_id → (generation, running product of per-locus MPs)
+    male_meta: dict[int, int] = {m.male_id: m.generation for m in males}
+    combined: dict[int, float] = {}
+
     rows: list[dict] = []
+    n_loci_used = 0
 
     for locus in loci:
         match_probs, average = compute_match_probs_fast(males, locus, mu)
@@ -69,6 +74,7 @@ def run(pedigree_path: str, mu: float, out_path: str | None) -> None:
             print(f"[{locus}]  suspect untyped or no untyped males — skipped")
             continue
 
+        n_loci_used += 1
         print(f"[{locus}]  average MP = {average:.6f}")
         for i, prob in match_probs.items():
             male_id = males[i].male_id
@@ -80,6 +86,14 @@ def run(pedigree_path: str, mu: float, out_path: str | None) -> None:
                 "generation": gen,
                 "match_prob": prob,
             })
+            combined[male_id] = combined.get(male_id, 1.0) * prob
+        print()
+
+    if n_loci_used > 1 and combined:
+        print(f"=== Combined MP (product over {n_loci_used} loci) ===")
+        for male_id, mp in sorted(combined.items(), key=lambda x: male_meta[x[0]]):
+            gen = male_meta[male_id]
+            print(f"    male_id={male_id}  gen={gen}  combined_MP={mp:.6e}")
         print()
 
     if out_path and rows:
@@ -88,6 +102,17 @@ def run(pedigree_path: str, mu: float, out_path: str | None) -> None:
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
+            # append combined MPs as a pseudo-locus row
+            if n_loci_used > 1:
+                writer.writerows([
+                    {
+                        "locus":      "COMBINED",
+                        "male_id":    male_id,
+                        "generation": male_meta[male_id],
+                        "match_prob": mp,
+                    }
+                    for male_id, mp in sorted(combined.items())
+                ])
         print(f"Results written to '{out_path}'")
 
 
