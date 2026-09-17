@@ -22,13 +22,15 @@ hypothetically assigned the suspect's allele.
 
 Mutation model
 --------------
-A one-step symmetric stepwise mutation model is used:
+A stepwise mutation model is used (one-step by default, two-step optional):
 
-    p(j -> k) = 1 - mu   if k == j
-                mu / 2   if |k - j| == 1
-                0        otherwise
+    p(j -> k) = 1 - mu - mu2   if k == j
+                mu / 2          if |k - j| == 1
+                mu2 / 2         if |k - j| == 2
+                0               otherwise
 
-where mu is the locus-specific mutation rate per meiosis.
+where mu is the one-step rate and mu2 the two-step rate per meiosis.
+Setting mu2 = 0 (default) recovers the standard one-step SSM.
 
 Multi-copy markers
 ------------------
@@ -78,7 +80,8 @@ import numpy as np
 
 MINALL: int   = 3      # Lower bound of allele range (inclusive)
 MAXALL: int   = 30     # Upper bound of allele range (inclusive)
-DEFAULT_MU: float = 0.1  # Default mutation rate per meiosis
+DEFAULT_MU: float  = 0.1   # Default one-step mutation rate per meiosis
+DEFAULT_MU2: float = 0.0   # Default two-step mutation rate per meiosis
 _WINDOW_MARGIN: int = 5  # Allele window half-width for multi-copy markers
 
 
@@ -181,13 +184,15 @@ def load_pedigree_from_csv(filepath: str) -> tuple[list[Male], list[str]]:
 # Mutation model
 # ---------------------------------------------------------------------------
 
-def make_stepwise_mutation_model(mu: float) -> Callable[[int, int], float]:
-    """Return the one-step symmetric stepwise mutation probability function.
+def make_stepwise_mutation_model(mu: float, mu2: float = 0.0) -> Callable[[int, int], float]:
+    """Return the stepwise mutation probability function (one- and two-step).
 
     Parameters
     ----------
     mu:
-        Mutation rate per meiosis.
+        One-step mutation rate per meiosis.
+    mu2:
+        Two-step mutation rate per meiosis (default 0 → one-step SSM only).
 
     Returns
     -------
@@ -197,9 +202,11 @@ def make_stepwise_mutation_model(mu: float) -> Callable[[int, int], float]:
     def p(j: int, k: int) -> float:
         diff = abs(k - j)
         if diff == 0:
-            return 1.0 - mu
+            return 1.0 - mu - mu2
         elif diff == 1:
             return mu / 2.0
+        elif diff == 2:
+            return mu2 / 2.0
         else:
             return 0.0
     return p
@@ -248,19 +255,24 @@ def _emission_mask(g: tuple[int, ...] | None, shape: tuple[int, ...],
     return mask
 
 
-def _build_T(mu: float, A: int) -> np.ndarray:
-    """Build the A×A one-step SSM transition matrix.
+def _build_T(mu: float, A: int, mu2: float = 0.0) -> np.ndarray:
+    """Build the A×A stepwise mutation transition matrix (one- and two-step).
 
     ``T[j, k]`` is the probability that an allele at offset *j* from
-    ``win_min`` mutates to offset *k* in one meiosis.
+    ``win_min`` mutates to offset *k* in one meiosis.  The diagonal is set
+    so each row sums to 1 (automatically handles boundary alleles).
     """
     T = np.zeros((A, A))
     for j in range(A):
-        T[j, j] = 1.0 - mu
         if j > 0:
             T[j, j - 1] = mu / 2.0
         if j < A - 1:
             T[j, j + 1] = mu / 2.0
+        if j > 1:
+            T[j, j - 2] = mu2 / 2.0
+        if j < A - 2:
+            T[j, j + 2] = mu2 / 2.0
+        T[j, j] = 1.0 - T[j, :].sum()
     return T
 
 
@@ -307,6 +319,7 @@ def compute_match_probs_multicopy(
     locus:         str,
     n_copies:      int,
     mu_all:        float = DEFAULT_MU,
+    mu2_all:       float = DEFAULT_MU2,
     minall:        int   = MINALL,
     maxall:        int   = MAXALL,
     window_margin: int   = _WINDOW_MARGIN,
@@ -356,8 +369,9 @@ def compute_match_probs_multicopy(
     """
     c = n_copies
 
-    # Per-copy mutation rate (equation 3 of the technical note)
-    mu = 1.0 - (1.0 - mu_all) ** (1.0 / c)
+    # Per-copy mutation rates (equation 3 of the technical note)
+    mu  = 1.0 - (1.0 - mu_all)  ** (1.0 / c)
+    mu2 = 1.0 - (1.0 - mu2_all) ** (1.0 / c)
 
     # Normalise allele values
     base: list[tuple[int, ...] | None] = [
@@ -375,7 +389,7 @@ def compute_match_probs_multicopy(
     win_max = min(maxall, max(obs_vals) + window_margin)
     A = win_max - win_min + 1
 
-    T = _build_T(mu, A)
+    T = _build_T(mu, A, mu2)
 
     # Pedigree connectivity
     n        = len(males)
@@ -470,6 +484,7 @@ def compute_match_probs_fast(
     males:  list[Male],
     locus:  str,
     mu:     float = DEFAULT_MU,
+    mu2:    float = DEFAULT_MU2,
     minall: int   = MINALL,
     maxall: int   = MAXALL,
 ) -> tuple[dict[int, float], float]:
@@ -507,8 +522,11 @@ def compute_match_probs_fast(
     locus:
         Locus name.
     mu:
-        Mutation rate per meiosis (default: DEFAULT_MU).
+        One-step mutation rate per meiosis (default: DEFAULT_MU).
         For multi-copy loci this is interpreted as the all-copy rate.
+    mu2:
+        Two-step mutation rate per meiosis (default: 0).
+        For multi-copy loci also interpreted as the all-copy rate.
     minall, maxall:
         Inclusive allele range (default: MINALL, MAXALL).
 
@@ -525,7 +543,7 @@ def compute_match_probs_fast(
     n_copies = _infer_copies(males, locus)
     if n_copies > 1:
         return compute_match_probs_multicopy(
-            males, locus, n_copies, mu_all=mu, minall=minall, maxall=maxall
+            males, locus, n_copies, mu_all=mu, mu2_all=mu2, minall=minall, maxall=maxall
         )
 
     base    = [m.alleles.get(locus, 0) for m in males]
@@ -549,7 +567,7 @@ def compute_match_probs_fast(
             sons[fi].append(i)
             father[i] = fi
 
-    p            = make_stepwise_mutation_model(mu)
+    p            = make_stepwise_mutation_model(mu, mu2)
     allele_range = range(minall, maxall + 1)
     A            = maxall - minall + 1
 
@@ -580,8 +598,8 @@ def compute_match_probs_fast(
                 beta[i][idx(k)] = val
 
         for k_f in allele_range:
-            lo  = max(minall, k_f - 1)
-            hi  = min(maxall, k_f + 1)
+            lo  = max(minall, k_f - 2)
+            hi  = min(maxall, k_f + 2)
             acc = 0.0
             for ll in range(lo, hi + 1):
                 acc += p(k_f, ll) * beta[i][idx(ll)]
@@ -623,8 +641,8 @@ def compute_match_probs_fast(
                 for kk in range(A)
             ]
             for k_i in allele_range:
-                lo  = max(minall, k_i - 1)
-                hi  = min(maxall, k_i + 1)
+                lo  = max(minall, k_i - 2)
+                hi  = min(maxall, k_i + 2)
                 acc = 0.0
                 for k_f in range(lo, hi + 1):
                     acc += p(k_f, k_i) * outside_excl_i[idx(k_f)]

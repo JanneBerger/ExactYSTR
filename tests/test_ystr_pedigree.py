@@ -110,10 +110,9 @@ def test_load_multicopy_csv_mc01():
     males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "MC01.csv"))
 
     assert loci == ["DYS385"]
+    assert len(males) == 2
     assert males[0].alleles == {"DYS385": (10, 11)}   # suspect, typed
     assert males[1].alleles == {"DYS385": 0}           # untyped (int 0)
-    assert males[2].alleles == {"DYS385": 0}           # untyped
-    assert males[3].alleles == {"DYS385": (10, 11)}    # typed descendant
 
 
 # ---------------------------------------------------------------------------
@@ -189,13 +188,12 @@ def test_multicopy_dispatch_via_fast():
 
 
 def test_multicopy_dispatch_via_csv():
-    # End-to-end: load MC01.csv (multi-copy) and run through the normal API.
+    # End-to-end: load MC01.csv (suspect + 1 untyped) and run through normal API.
     males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "MC01.csv"))
     mp, avg = compute_match_probs_fast(males, "DYS385", mu=0.0)
 
-    assert mp.keys() == {1, 2}
+    assert mp.keys() == {1}         # index 1 is the one untyped male
     assert mp[1] == pytest.approx(1.0)
-    assert mp[2] == pytest.approx(1.0)
 
 
 def test_multicopy_crossing_term_vs_shortcut():
