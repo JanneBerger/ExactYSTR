@@ -25,6 +25,7 @@ from ystr_pedigree import (
     DEFAULT_MU2,
     MINALL,
     MAXALL,
+    _infer_copies,
     compute_match_probs_fast,
     load_pedigree_from_csv,
 )
@@ -88,7 +89,14 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
             continue
 
         n_loci_used += 1
-        print(f"[{locus}]  average MP = {average:.6f}")
+        c = _infer_copies(males, locus)
+        if c > 1:
+            mu_pc = 1.0 - (1.0 - mu) ** (1.0 / c)
+            z = mu_pc / 2.0
+            print(f"[{locus}]  {c} copies  →  mu_pc = {mu_pc:.6g} per copy, z = {z:.6g}")
+            print(f"    average MP = {average:.6f}")
+        else:
+            print(f"[{locus}]  average MP = {average:.6f}")
         for i, prob in match_probs.items():
             male_id = males[i].male_id
             gen     = males[i].generation
