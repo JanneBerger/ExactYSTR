@@ -47,6 +47,7 @@ import matplotlib.ticker as ticker
 from ystr_pedigree import (
     Male,
     compute_match_probs_fast as compute_match_probs,
+    compute_match_probs_multicopy,
     MINALL,
     MAXALL,
     DEFAULT_MU,
@@ -62,6 +63,11 @@ REPEATS = 5            # timing-noise samples (median) per untyped-placement
 N_SEEDS = 20            # number of random untyped-placements per data point
 LOCUS   = "L"          # generic locus name
 SEED    = 22112000     # base seed; placement k uses SEED + k
+
+N_SEEDS_MC  = 5            # fewer seeds for the expensive c-sweep
+SUSPECT_MC  = 16           # allele carried by the suspect in multicopy experiments
+_MARGIN_MC  = 5            # window_margin used inside compute_match_probs_multicopy
+A_MC        = 2 * _MARGIN_MC + 1   # effective allele window size = 11
 
 TOPOLOGIES = {
     "Linear chain (1 son)":  1,
@@ -137,6 +143,36 @@ def generate_pedigree(n: int, n_untyped: int, branching: int,
             generation = generation,
             father_id  = father_id,
             alleles    = alleles,
+        ))
+
+    males.sort(key=lambda m: (m.generation, m.male_id))
+    return males
+
+
+def generate_multicopy_pedigree(
+    n: int, n_untyped: int, branching: int,
+    locus: str, n_copies: int,
+    suspect_allele: int = SUSPECT_MC,
+    seed: int = SEED,
+) -> list[Male]:
+    """Like generate_pedigree but typed males carry a tuple allele of length n_copies."""
+    rng     = random.Random(seed)
+    untyped = set(rng.sample(range(1, n), min(n_untyped, n - 1)))
+
+    males = []
+    for i in range(n):
+        father_id = (i - 1) // branching if i > 0 else -1
+        generation = 0
+        j = i
+        while j > 0:
+            j = (j - 1) // branching
+            generation += 1
+        allele = 0 if i in untyped else tuple([suspect_allele] * n_copies)
+        males.append(Male(
+            male_id    = i,
+            generation = generation,
+            father_id  = father_id,
+            alleles    = {locus: allele},
         ))
 
     males.sort(key=lambda m: (m.generation, m.male_id))
@@ -254,6 +290,37 @@ def experiment_L(Ls, n=50, u=25):
         males = generate_pedigree(n, u, branching, loci, seed=seed)
         return [(males, loc, MU, MINALL, MAXALL) for loc in loci]
     return run_experiment("L", Ls, build)
+
+
+def experiment_c(cs, n=50, u=25):
+    print(f"[5/5] Sweep: copy count c  (n={n}, u={u}, A={A_MC}, {N_SEEDS_MC} placements/point)")
+
+    means = {name: [] for name in TOPOLOGIES}
+    stds  = {name: [] for name in TOPOLOGIES}
+
+    for c in cs:
+        for name, branching in TOPOLOGIES.items():
+            placement_times = []
+            for k in range(N_SEEDS_MC):
+                males = generate_multicopy_pedigree(
+                    n, u, branching, LOCUS, c, seed=SEED + k
+                )
+                t = measure(
+                    compute_match_probs_multicopy,
+                    males, LOCUS, c, MU,
+                    repeats=REPEATS,
+                )
+                placement_times.append(t)
+            means[name].append(float(np.mean(placement_times)))
+            stds[name].append(float(np.std(placement_times)))
+
+        vals = "  ".join(
+            f"{name.split()[0][0]}={means[name][-1]:.1f}±{stds[name][-1]:.1f}ms"
+            for name in TOPOLOGIES
+        )
+        print(f"  c={c:>2}   {vals}")
+
+    return means, stds
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +503,60 @@ def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A, Ls, res_L,
     plt.show()
 
 
+def make_figure_multicopy(cs, res_c, std_c):
+    plt.rcParams.update({
+        "font.family":      "serif",
+        "font.size":        10,
+        "axes.linewidth":   0.8,
+        "xtick.direction":  "in",
+        "ytick.direction":  "in",
+        "xtick.top":        True,
+        "ytick.right":      True,
+    })
+
+    fig, ax = plt.subplots(1, 1, figsize=(5, 4.5))
+    fig.subplots_adjust(bottom=0.25, left=0.18)
+
+    for name in TOPOLOGIES:
+        ys  = res_c[name]
+        err = std_c[name]
+        ax.errorbar(cs, ys, yerr=err,
+                    marker=MARKERS_STYLE[name],
+                    color=COLORS[name],
+                    linewidth=1.5, markersize=5, capsize=3,
+                    elinewidth=0.8, label=name)
+
+    add_theory_line(ax, cs, res_c,
+                    lambda c: c * A_MC ** c,
+                    label=f"theory: $O(c \\cdot A^c)$,  $A={A_MC}$")
+
+    ax.set_xlabel("Number of copies  $c$", fontsize=10)
+    ax.set_ylabel("Runtime (ms)", fontsize=10)
+    ax.set_yscale("log")
+    ax.set_xticks(cs)
+    ax.tick_params(labelsize=9)
+    ax.text(0.97, 0.05,
+            f"$n_{{tot}} = 50$,  $n_{{unt}} = 25$,  $A = {A_MC}$",
+            transform=ax.transAxes, fontsize=8, va="bottom", ha="right")
+
+    # Panel label
+    ax.text(-0.24, 1.0, "e", transform=ax.transAxes,
+            fontsize=11, fontweight="bold", va="top", ha="right")
+
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(handles, labels,
+               loc="lower center",
+               bbox_to_anchor=(0.5, 0.01),
+               ncol=2, fontsize=9, frameon=False)
+
+    base = "runtime_analysis_multicopy"
+    for ext in ("png", "pdf", "svg"):
+        out = f"{base}.{ext}"
+        plt.savefig(out, dpi=350, bbox_inches="tight")
+        print(f"Figure saved: {out}")
+    plt.close(fig)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -455,3 +576,7 @@ if __name__ == "__main__":
     res_L, std_L = experiment_L(Ls)
 
     make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A, Ls, res_L, std_L)
+
+    cs = [1, 2, 3, 4]
+    res_c, std_c = experiment_c(cs)
+    make_figure_multicopy(cs, res_c, std_c)
