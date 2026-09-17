@@ -14,6 +14,10 @@ The pedigree CSV must contain columns:
 
 See examples/example_pedigree.csv for the expected format.
 All loci use a fixed allele range of [3, 30].
+
+--mu is always the per-copy mutation rate (mu_pc).  For multi-copy loci
+the per-locus rate mu_all = 1-(1-mu)^c is derived automatically and shown
+in the console output.
 """
 
 import argparse
@@ -22,7 +26,6 @@ import sys
 
 from ystr_pedigree import (
     DEFAULT_MU,
-    DEFAULT_MU2,
     MINALL,
     MAXALL,
     _infer_copies,
@@ -41,21 +44,14 @@ def parse_args() -> argparse.Namespace:
         metavar="PEDIGREE_CSV",
         help="Path to the input pedigree CSV file.",
     )
-    rate_group = parser.add_mutually_exclusive_group()
-    rate_group.add_argument(
+    parser.add_argument(
         "--mu",
         type=float,
-        default=None,
-        help="Per-locus (all-copy) mutation rate. Default: %(default)s.",
-    )
-    rate_group.add_argument(
-        "--z",
-        type=float,
-        default=None,
-        metavar="Z",
+        default=DEFAULT_MU,
         help=(
-            "Per-copy step rate (mu_pc = 2z). For multi-copy loci the "
-            "per-locus rate mu_all = 1-(1-2z)^c is derived automatically."
+            "Per-copy mutation rate (mu_pc). For multi-copy loci the "
+            "per-locus rate mu_all = 1-(1-mu)^c is derived automatically. "
+            "Default: %(default)s."
         ),
     )
     parser.add_argument(
@@ -74,27 +70,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run(
-    pedigree_path: str,
-    mu: float | None,
-    z: float | None,
-    two_step_frac: float,
-    out_path: str | None,
-) -> None:
-    if mu is None and z is None:
-        mu = DEFAULT_MU
-
+def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | None) -> None:
     males, loci = load_pedigree_from_csv(pedigree_path)
     print(f"Loaded {len(males)} males, {len(loci)} loci from '{pedigree_path}'")
-    if z is not None:
-        print(f"Per-copy step rate:  z = {z}  (mu_pc = {2*z:.6g})")
-    else:
-        print(f"Mutation rate:  mu = {mu}")
+    print(f"Mutation rate:  mu = {mu}  (per copy)")
     if two_step_frac:
         print(f"Two-step fraction: {two_step_frac}")
     print(f"Allele range:  [{MINALL}, {MAXALL}]\n")
 
-    # male_id → generation
     male_meta: dict[int, int] = {m.male_id: m.generation for m in males}
     combined: dict[int, float] = {}
 
@@ -104,14 +87,8 @@ def run(
     for locus in loci:
         c = _infer_copies(males, locus)
 
-        # Resolve per-locus rate
-        if z is not None:
-            mu_pc = 2.0 * z
-            mu_all = 1.0 - (1.0 - mu_pc) ** c
-        else:
-            mu_all = mu
-            mu_pc = 1.0 - (1.0 - mu_all) ** (1.0 / c)
-
+        # mu is per-copy; derive per-locus all-copy rate for this locus
+        mu_all = 1.0 - (1.0 - mu) ** c
         lmu1 = mu_all * (1.0 - two_step_frac)
         lmu2 = mu_all * two_step_frac
 
@@ -123,16 +100,7 @@ def run(
 
         n_loci_used += 1
         if c > 1:
-            if z is not None:
-                print(
-                    f"[{locus}]  {c} copies  →  z = {z}, mu_pc = {mu_pc:.6g} per copy"
-                    f", mu_all = {mu_all:.6g}"
-                )
-            else:
-                print(
-                    f"[{locus}]  {c} copies  →  mu_all = {mu_all:.6g}"
-                    f", mu_pc = {mu_pc:.6g} per copy, z = {mu_pc/2:.6g}"
-                )
+            print(f"[{locus}]  {c} copies  →  mu_all = {mu_all:.6g} (= 1-(1-{mu})^{c})")
             print(f"    average MP = {average:.6f}")
         else:
             print(f"[{locus}]  average MP = {average:.6f}")
@@ -162,7 +130,6 @@ def run(
             writer = csv.DictWriter(fh, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
-            # append combined MPs as a pseudo-locus row
             if n_loci_used > 1:
                 writer.writerows([
                     {
@@ -179,7 +146,7 @@ def run(
 def main() -> None:
     args = parse_args()
     try:
-        run(args.pedigree, args.mu, args.z, args.two_step_frac, args.out)
+        run(args.pedigree, args.mu, args.two_step_frac, args.out)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
