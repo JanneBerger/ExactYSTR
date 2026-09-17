@@ -41,11 +41,22 @@ def parse_args() -> argparse.Namespace:
         metavar="PEDIGREE_CSV",
         help="Path to the input pedigree CSV file.",
     )
-    parser.add_argument(
+    rate_group = parser.add_mutually_exclusive_group()
+    rate_group.add_argument(
         "--mu",
         type=float,
-        default=DEFAULT_MU,
-        help="One-step mutation rate per meiosis.",
+        default=None,
+        help="Per-locus (all-copy) mutation rate. Default: %(default)s.",
+    )
+    rate_group.add_argument(
+        "--z",
+        type=float,
+        default=None,
+        metavar="Z",
+        help=(
+            "Per-copy step rate (mu_pc = 2z). For multi-copy loci the "
+            "per-locus rate mu_all = 1-(1-2z)^c is derived automatically."
+        ),
     )
     parser.add_argument(
         "--two-step-frac",
@@ -63,18 +74,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | None) -> None:
-    mu1 = mu * (1.0 - two_step_frac)
-    mu2 = mu * two_step_frac
+def run(
+    pedigree_path: str,
+    mu: float | None,
+    z: float | None,
+    two_step_frac: float,
+    out_path: str | None,
+) -> None:
+    if mu is None and z is None:
+        mu = DEFAULT_MU
 
     males, loci = load_pedigree_from_csv(pedigree_path)
     print(f"Loaded {len(males)} males, {len(loci)} loci from '{pedigree_path}'")
-    print(f"Mutation rate:  mu = {mu}")
+    if z is not None:
+        print(f"Per-copy step rate:  z = {z}  (mu_pc = {2*z:.6g})")
+    else:
+        print(f"Mutation rate:  mu = {mu}")
     if two_step_frac:
-        print(f"Two-step fraction: {two_step_frac}  →  mu1 = {mu1:.6g}, mu2 = {mu2:.6g}")
+        print(f"Two-step fraction: {two_step_frac}")
     print(f"Allele range:  [{MINALL}, {MAXALL}]\n")
 
-    # male_id → (generation, running product of per-locus MPs)
+    # male_id → generation
     male_meta: dict[int, int] = {m.male_id: m.generation for m in males}
     combined: dict[int, float] = {}
 
@@ -82,18 +102,37 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
     n_loci_used = 0
 
     for locus in loci:
-        match_probs, average = compute_match_probs_fast(males, locus, mu1, mu2=mu2)
+        c = _infer_copies(males, locus)
+
+        # Resolve per-locus rate
+        if z is not None:
+            mu_pc = 2.0 * z
+            mu_all = 1.0 - (1.0 - mu_pc) ** c
+        else:
+            mu_all = mu
+            mu_pc = 1.0 - (1.0 - mu_all) ** (1.0 / c)
+
+        lmu1 = mu_all * (1.0 - two_step_frac)
+        lmu2 = mu_all * two_step_frac
+
+        match_probs, average = compute_match_probs_fast(males, locus, lmu1, mu2=lmu2)
 
         if not match_probs:
             print(f"[{locus}]  suspect untyped or no untyped males — skipped")
             continue
 
         n_loci_used += 1
-        c = _infer_copies(males, locus)
         if c > 1:
-            mu_pc = 1.0 - (1.0 - mu) ** (1.0 / c)
-            z = mu_pc / 2.0
-            print(f"[{locus}]  {c} copies  →  mu_pc = {mu_pc:.6g} per copy, z = {z:.6g}")
+            if z is not None:
+                print(
+                    f"[{locus}]  {c} copies  →  z = {z}, mu_pc = {mu_pc:.6g} per copy"
+                    f", mu_all = {mu_all:.6g}"
+                )
+            else:
+                print(
+                    f"[{locus}]  {c} copies  →  mu_all = {mu_all:.6g}"
+                    f", mu_pc = {mu_pc:.6g} per copy, z = {mu_pc/2:.6g}"
+                )
             print(f"    average MP = {average:.6f}")
         else:
             print(f"[{locus}]  average MP = {average:.6f}")
@@ -140,7 +179,7 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
 def main() -> None:
     args = parse_args()
     try:
-        run(args.pedigree, args.mu, args.two_step_frac, args.out)
+        run(args.pedigree, args.mu, args.z, args.two_step_frac, args.out)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
