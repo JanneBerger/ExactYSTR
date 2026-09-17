@@ -7,7 +7,7 @@ calculator based on the Elston-Stewart algorithm.
 
 Usage
 -----
-    python cli.py pedigree.csv [--mu 0.1] [--out results.csv]
+    python cli.py pedigree.csv [--mu 0.1] [--mu2 0.0] [--out results.csv]
 
 The pedigree CSV must contain columns:
     male_id, generation, father_id, allele_<LOCUS>, ...
@@ -22,6 +22,7 @@ import sys
 
 from ystr_pedigree import (
     DEFAULT_MU,
+    DEFAULT_MU2,
     MINALL,
     MAXALL,
     compute_match_probs_fast,
@@ -43,7 +44,13 @@ def parse_args() -> argparse.Namespace:
         "--mu",
         type=float,
         default=DEFAULT_MU,
-        help="Mutation rate per meiosis.",
+        help="One-step mutation rate per meiosis.",
+    )
+    parser.add_argument(
+        "--mu2",
+        type=float,
+        default=DEFAULT_MU2,
+        help="Two-step mutation rate per meiosis (default: 0).",
     )
     parser.add_argument(
         "--out",
@@ -54,10 +61,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run(pedigree_path: str, mu: float, out_path: str | None) -> None:
+def run(pedigree_path: str, mu: float, mu2: float, out_path: str | None) -> None:
     males, loci = load_pedigree_from_csv(pedigree_path)
     print(f"Loaded {len(males)} males, {len(loci)} loci from '{pedigree_path}'")
-    print(f"Mutation rate: mu = {mu}")
+    print(f"One-step mutation rate:  mu  = {mu}")
+    if mu2:
+        print(f"Two-step mutation rate:  mu2 = {mu2}")
     print(f"Allele range:  [{MINALL}, {MAXALL}]\n")
 
     # male_id → (generation, running product of per-locus MPs)
@@ -68,7 +77,7 @@ def run(pedigree_path: str, mu: float, out_path: str | None) -> None:
     n_loci_used = 0
 
     for locus in loci:
-        match_probs, average = compute_match_probs_fast(males, locus, mu)
+        match_probs, average = compute_match_probs_fast(males, locus, mu, mu2)
 
         if not match_probs:
             print(f"[{locus}]  suspect untyped or no untyped males — skipped")
@@ -119,7 +128,7 @@ def run(pedigree_path: str, mu: float, out_path: str | None) -> None:
 def main() -> None:
     args = parse_args()
     try:
-        run(args.pedigree, args.mu, args.out)
+        run(args.pedigree, args.mu, args.mu2, args.out)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
