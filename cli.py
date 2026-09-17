@@ -23,6 +23,7 @@ in the console output.
 import argparse
 import csv
 import sys
+import time
 
 from ystr_pedigree import (
     DEFAULT_MU,
@@ -92,18 +93,21 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
         lmu1 = mu_all * (1.0 - two_step_frac)
         lmu2 = mu_all * two_step_frac
 
+        t0 = time.perf_counter()
         match_probs, average = compute_match_probs_fast(males, locus, lmu1, mu2=lmu2)
+        elapsed = time.perf_counter() - t0
 
         if not match_probs:
             print(f"[{locus}]  suspect untyped or no untyped males — skipped")
             continue
 
         n_loci_used += 1
+        t_str = f"{elapsed*1000:.1f} ms" if elapsed < 1 else f"{elapsed:.3f} s"
         if c > 1:
-            print(f"[{locus}]  {c} copies  →  mu_all = {mu_all:.6g} (= 1-(1-{mu})^{c})")
+            print(f"[{locus}]  {c} copies  →  mu_all = {mu_all:.6g} (= 1-(1-{mu})^{c})  [{t_str}]")
             print(f"    average MP = {average:.6f}")
         else:
-            print(f"[{locus}]  average MP = {average:.6f}")
+            print(f"[{locus}]  average MP = {average:.6f}  [{t_str}]")
         for i, prob in match_probs.items():
             male_id = males[i].male_id
             gen     = males[i].generation
