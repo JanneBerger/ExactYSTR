@@ -484,9 +484,10 @@ def compute_match_probs_fast(
     males:  list[Male],
     locus:  str,
     mu:     float = DEFAULT_MU,
-    mu2:    float = DEFAULT_MU2,
     minall: int   = MINALL,
     maxall: int   = MAXALL,
+    *,
+    mu2:    float = DEFAULT_MU2,
 ) -> tuple[dict[int, float], float]:
     """Compute match probabilities for all untyped males at one locus.
 
