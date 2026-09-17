@@ -7,7 +7,7 @@ calculator based on the Elston-Stewart algorithm.
 
 Usage
 -----
-    python cli.py pedigree.csv [--mu 0.1] [--mu2 0.0] [--out results.csv]
+    python cli.py pedigree.csv [--mu 0.1] [--two-step-frac 0.0] [--out results.csv]
 
 The pedigree CSV must contain columns:
     male_id, generation, father_id, allele_<LOCUS>, ...
@@ -47,10 +47,11 @@ def parse_args() -> argparse.Namespace:
         help="One-step mutation rate per meiosis.",
     )
     parser.add_argument(
-        "--mu2",
+        "--two-step-frac",
         type=float,
-        default=DEFAULT_MU2,
-        help="Two-step mutation rate per meiosis (default: 0).",
+        default=0.0,
+        metavar="FRAC",
+        help="Fraction of mutations that are two-step (0–1, default: 0).",
     )
     parser.add_argument(
         "--out",
@@ -61,12 +62,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run(pedigree_path: str, mu: float, mu2: float, out_path: str | None) -> None:
+def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | None) -> None:
+    mu1 = mu * (1.0 - two_step_frac)
+    mu2 = mu * two_step_frac
+
     males, loci = load_pedigree_from_csv(pedigree_path)
     print(f"Loaded {len(males)} males, {len(loci)} loci from '{pedigree_path}'")
-    print(f"One-step mutation rate:  mu  = {mu}")
-    if mu2:
-        print(f"Two-step mutation rate:  mu2 = {mu2}")
+    print(f"Mutation rate:  mu = {mu}")
+    if two_step_frac:
+        print(f"Two-step fraction: {two_step_frac}  →  mu1 = {mu1:.6g}, mu2 = {mu2:.6g}")
     print(f"Allele range:  [{MINALL}, {MAXALL}]\n")
 
     # male_id → (generation, running product of per-locus MPs)
@@ -77,7 +81,7 @@ def run(pedigree_path: str, mu: float, mu2: float, out_path: str | None) -> None
     n_loci_used = 0
 
     for locus in loci:
-        match_probs, average = compute_match_probs_fast(males, locus, mu, mu2)
+        match_probs, average = compute_match_probs_fast(males, locus, mu1, mu2)
 
         if not match_probs:
             print(f"[{locus}]  suspect untyped or no untyped males — skipped")
@@ -128,7 +132,7 @@ def run(pedigree_path: str, mu: float, mu2: float, out_path: str | None) -> None
 def main() -> None:
     args = parse_args()
     try:
-        run(args.pedigree, args.mu, args.mu2, args.out)
+        run(args.pedigree, args.mu, args.two_step_frac, args.out)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
