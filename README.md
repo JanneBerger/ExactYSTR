@@ -152,26 +152,29 @@ single locus), i-MP also has a simple closed form you can check by hand:
 `i-MP = 1 - Π_i (1 - P_i)`, with each `P_i` from `compute_match_probs_fast`
 / `compute_match_probs_multicopy`.
 
-### Validation evidence across the example pedigrees
+### Exact vs. sampled i-MP, with runtime
 
-`validate_i_mp.py` runs this comparison across every pedigree in
+`validate_i_mp.py` runs both methods across every pedigree in
 `Pedigrees/` (the same set used to validate the per-individual match
-probability engine) and prints a summary table:
+probability engine) and prints i-MP and wall-clock time for each:
 
 ```bash
 python validate_i_mp.py --n-samples 500000 --out i_mp_validation.csv
 ```
 
-For each pedigree it reports the exact i-MP (when the candidate count
-is small enough for brute-force inclusion-exclusion), the sampled i-MP
-with its standard error, the resulting z-score, and the naive
-independence value `1 - Π(1 - P_i)`. This mirrors the technical note's
-own validation methodology (Section 5): "two independent
-implementations" is the exact peel vs. the sampling estimator, and the
-z-scores staying within a few standard deviations is the "internal
-consistency" check. It also reports how many pedigrees make the naive
-independence formula measurably wrong — exactly those where two
-candidates share an untyped common ancestor.
+```
+              pedigree   n loci cand       exact   t_exact     sampled t_sampled
+--------------------------------------------------------------------------------
+               A01.csv   2    1    1    0.900000    0.4 ms    0.900000   80.4 ms
+               ...
+               F01.csv  15   30   11    0.009430   18.97 s    0.009500   19.08 s
+    Large_Pedigree.csv 500    1  499         n/a       n/a    1.000000   19.88 s
+```
+
+`exact`/`t_exact` come from `compute_at_least_one_match_exact` (no
+sampling at all, cost `O(2^|candidates|)`, `n/a` when the candidate
+count exceeds `EXACT_MAX_CANDIDATES`); `sampled`/`t_sampled` from
+`compute_at_least_one_match` at the given `--n-samples`.
 
 ### Runtime analysis
 
