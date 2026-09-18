@@ -53,6 +53,7 @@ are integers in a fixed range (default `[3, 30]`).
 | `ystr_pedigree.py` | Core algorithm: pedigree data structures, CSV loading, mutation model, `compute_match_probs_fast` (linear-time inside-outside version), and `compute_at_least_one_match` (i-MP via exact sampling from the peeling messages). |
 | `cli.py` | Command-line interface for running the calculator on a pedigree CSV file. |
 | `runtime_analysis.py` | Empirical runtime benchmarking script that measures how `compute_match_probs_fast` scales with pedigree size, number of untyped males, allele range, and number of loci, and plots the results. |
+| `validate_i_mp.py` | Validation script comparing exact vs. sampled i-MP (and the naive independence formula) across all example pedigrees; see "Validation evidence" below. |
 | `Pedigrees/` | Example pedigree CSV files (`A01.csv` … `E02.csv`). |
 | `LICENSE.txt` | MIT license. |
 
@@ -116,6 +117,64 @@ relative), i-MP is reported as exactly `1.0`. If every candidate's
 individual match probability is far below `1/n_samples`, the sampling
 estimate rounds to zero and the CLI instead reports the exact first-order
 approximation `i-MP ≈ Σ_i P_i` (Section 3.2 of the technical note).
+
+### Verifying i-MP analytically
+
+`compute_at_least_one_match` estimates i-MP by sampling, so it carries a
+reportable but nonzero standard error. For small pedigrees you can check
+it against `compute_at_least_one_match_exact`, which computes the exact
+value with **no sampling** via the full inclusion-exclusion sum
+(equation 13): every term `P(all of S match)`, for every subset `S` of
+candidates, is computed exactly by clamping `S` to the suspect's allele
+and re-running one ordinary peel (equation 14). This is exact for any
+pedigree topology — including candidates who share an untyped common
+ancestor, where they are *not* independent and a naive
+`1 - Π(1 - P_i)` formula would be wrong — but costs `O(2^|C|)`, so it is
+only practical for a handful of candidates (tune with `max_candidates`).
+
+```python
+from ystr_pedigree import (
+    load_pedigree_from_csv, compute_at_least_one_match, compute_at_least_one_match_exact,
+)
+
+males, loci = load_pedigree_from_csv("Pedigrees/MC04.csv")
+
+exact   = compute_at_least_one_match_exact(males, loci, mu=0.1)
+sampled = compute_at_least_one_match(males, loci, mu=0.1, n_samples=200_000, seed=1)
+
+print(exact, sampled.i_mp, sampled.se)
+# 0.82466875 0.82491 0.00085   <- sampled should sit within a few `se` of `exact`
+```
+
+For the special case where all candidates are conditionally independent
+given the typed suspect (e.g. two sons with no shared untyped ancestor,
+single locus), i-MP also has a simple closed form you can check by hand:
+`i-MP = 1 - Π_i (1 - P_i)`, with each `P_i` from `compute_match_probs_fast`
+/ `compute_match_probs_multicopy`.
+
+### Exact vs. sampled i-MP, with runtime
+
+`validate_i_mp.py` runs both methods across every pedigree in
+`Pedigrees/` (the same set used to validate the per-individual match
+probability engine) and prints i-MP and wall-clock time for each:
+
+```bash
+python validate_i_mp.py --n-samples 500000 --out i_mp_validation.csv
+```
+
+```
+              pedigree   n loci cand       exact   t_exact     sampled t_sampled
+--------------------------------------------------------------------------------
+               A01.csv   2    1    1    0.900000    0.4 ms    0.900000   80.4 ms
+               ...
+               F01.csv  15   30   11    0.009430   18.97 s    0.009500   19.08 s
+    Large_Pedigree.csv 500    1  499         n/a       n/a    1.000000   19.88 s
+```
+
+`exact`/`t_exact` come from `compute_at_least_one_match_exact` (no
+sampling at all, cost `O(2^|candidates|)`, `n/a` when the candidate
+count exceeds `EXACT_MAX_CANDIDATES`); `sampled`/`t_sampled` from
+`compute_at_least_one_match` at the given `--n-samples`.
 
 ### Runtime analysis
 
