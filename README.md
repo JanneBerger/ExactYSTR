@@ -117,6 +117,40 @@ individual match probability is far below `1/n_samples`, the sampling
 estimate rounds to zero and the CLI instead reports the exact first-order
 approximation `i-MP ≈ Σ_i P_i` (Section 3.2 of the technical note).
 
+### Verifying i-MP analytically
+
+`compute_at_least_one_match` estimates i-MP by sampling, so it carries a
+reportable but nonzero standard error. For small pedigrees you can check
+it against `compute_at_least_one_match_exact`, which computes the exact
+value with **no sampling** via the full inclusion-exclusion sum
+(equation 13): every term `P(all of S match)`, for every subset `S` of
+candidates, is computed exactly by clamping `S` to the suspect's allele
+and re-running one ordinary peel (equation 14). This is exact for any
+pedigree topology — including candidates who share an untyped common
+ancestor, where they are *not* independent and a naive
+`1 - Π(1 - P_i)` formula would be wrong — but costs `O(2^|C|)`, so it is
+only practical for a handful of candidates (tune with `max_candidates`).
+
+```python
+from ystr_pedigree import (
+    load_pedigree_from_csv, compute_at_least_one_match, compute_at_least_one_match_exact,
+)
+
+males, loci = load_pedigree_from_csv("Pedigrees/MC04.csv")
+
+exact   = compute_at_least_one_match_exact(males, loci, mu=0.1)
+sampled = compute_at_least_one_match(males, loci, mu=0.1, n_samples=200_000, seed=1)
+
+print(exact, sampled.i_mp, sampled.se)
+# 0.82466875 0.82491 0.00085   <- sampled should sit within a few `se` of `exact`
+```
+
+For the special case where all candidates are conditionally independent
+given the typed suspect (e.g. two sons with no shared untyped ancestor,
+single locus), i-MP also has a simple closed form you can check by hand:
+`i-MP = 1 - Π_i (1 - P_i)`, with each `P_i` from `compute_match_probs_fast`
+/ `compute_match_probs_multicopy`.
+
 ### Runtime analysis
 
 ```bash

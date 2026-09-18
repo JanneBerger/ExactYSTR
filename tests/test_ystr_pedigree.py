@@ -15,6 +15,7 @@ import pytest
 from ystr_pedigree import (
     Male,
     compute_at_least_one_match,
+    compute_at_least_one_match_exact,
     compute_match_probs_fast,
     compute_match_probs_multicopy,
     load_pedigree_from_csv,
@@ -415,3 +416,76 @@ def test_at_least_one_match_reproducible_with_seed():
     res_a = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=5000, seed=123)
     res_b = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=5000, seed=123)
     assert res_a.i_mp == res_b.i_mp
+
+
+# ---------------------------------------------------------------------------
+# compute_at_least_one_match_exact: brute-force inclusion-exclusion (eq. 13),
+# a non-sampling cross-check for compute_at_least_one_match
+# ---------------------------------------------------------------------------
+
+def test_exact_matches_independence_formula_for_disjoint_branches():
+    # Two sons of a typed suspect (single locus): conditionally independent
+    # given the root, so the exact inclusion-exclusion result must equal
+    # the closed-form union formula 1 - (1-p)(1-p).
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"M1": 13}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"M1": 0}),
+        Male(male_id=3, generation=1, father_id=1,  alleles={"M1": 0}),
+    ]
+    mp, _ = compute_match_probs_fast(males, "M1", mu=0.1)
+    naive = 1.0 - (1.0 - mp[1]) * (1.0 - mp[2])
+
+    exact = compute_at_least_one_match_exact(males, ["M1"], mu=0.1)
+    assert exact == pytest.approx(naive, abs=1e-12)
+
+
+def test_exact_disagrees_with_naive_independence_for_shared_ancestor():
+    # suspect -> untyped A -> untyped B, untyped C.  B and C are NOT
+    # conditionally independent given only the (typed) suspect: they
+    # share the uncertainty in A's genotype.  The naive
+    # 1-(1-p)(1-p)(1-p) formula (which ignores that dependency) must be
+    # measurably wrong, while the sampling estimator must agree with the
+    # exact inclusion-exclusion result to within a few standard errors.
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"M1": 13}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"M1": 0}),  # A
+        Male(male_id=3, generation=2, father_id=2,  alleles={"M1": 0}),  # B
+        Male(male_id=4, generation=2, father_id=2,  alleles={"M1": 0}),  # C
+    ]
+    mp, _ = compute_match_probs_fast(males, "M1", mu=0.1)
+    naive = 1.0 - (1.0 - mp[1]) * (1.0 - mp[2]) * (1.0 - mp[3])
+
+    exact = compute_at_least_one_match_exact(males, ["M1"], mu=0.1)
+    assert abs(exact - naive) > 0.01  # naive independence is measurably wrong here
+
+    sampled = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=200_000, seed=2)
+    assert sampled.i_mp == pytest.approx(exact, abs=5 * sampled.se)
+
+
+def test_exact_matches_sampled_for_multicopy_pedigree():
+    males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "MC04.csv"))
+    exact = compute_at_least_one_match_exact(males, loci, mu=0.1)
+    sampled = compute_at_least_one_match(males, loci, mu=0.1, n_samples=200_000, seed=3)
+    assert sampled.i_mp == pytest.approx(exact, abs=5 * sampled.se)
+
+
+def test_exact_known_match_is_exactly_one():
+    males, _ = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "D01.csv"))
+    assert compute_at_least_one_match_exact(males, ["M1"], mu=0.1) == 1.0
+
+
+def test_exact_no_candidates_is_zero():
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"A": 13, "B": 20}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"A": 0,  "B": 21}),  # excluded via B
+    ]
+    assert compute_at_least_one_match_exact(males, ["A", "B"], mu=0.1) == 0.0
+
+
+def test_exact_raises_above_max_candidates():
+    loci = ["M1"]
+    males = [Male(male_id=1, generation=0, father_id=-1, alleles={"M1": 13})]
+    for k in range(6):
+        males.append(Male(male_id=k + 2, generation=1, father_id=1, alleles={"M1": 0}))
+    with pytest.raises(ValueError):
+        compute_at_least_one_match_exact(males, loci, mu=0.1, max_candidates=3)

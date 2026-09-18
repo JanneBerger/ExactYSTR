@@ -68,7 +68,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field
-from itertools import permutations
+from itertools import combinations, permutations
 from typing import Callable
 
 import numpy as np
@@ -1118,3 +1118,139 @@ def compute_at_least_one_match(
         used_fallback=used_fallback, fallback_estimate=fallback_estimate,
         known_match=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# Exact brute-force i-MP (full inclusion-exclusion) -- a non-sampling
+# cross-check for compute_at_least_one_match, feasible for small |C|
+# ---------------------------------------------------------------------------
+
+def _clamped_all_match_prob(
+    males:         list[Male],
+    locus:         str,
+    candidate_idx: tuple[int, ...],
+    P1:            float,
+    mu_all:        float,
+    mu2_all:       float,
+    n_copies:      int,
+    minall:        int,
+    maxall:        int,
+    window_margin: int,
+) -> float:
+    """One term of equation (14): P(every male in *candidate_idx* matches
+    the suspect at *locus*), computed by *clamping* each of them to the
+    suspect's own observed genotype (same emission mask -- i.e. "matches",
+    without asserting a specific copy ordering) and re-running the inside
+    pass. This is an ordinary peel, exact and independent of sampling.
+
+    *P1* is the (already computed) unclamped pedigree likelihood at this
+    locus, i.e. ``sum(beta_root)`` from the unmodified pedigree.
+    """
+    if not candidate_idx:
+        return 1.0
+
+    suspect_allele = males[0].alleles.get(locus, 0)
+    clamped = [Male(m.male_id, m.generation, m.father_id, dict(m.alleles)) for m in males]
+    for i in candidate_idx:
+        clamped[i].alleles[locus] = suspect_allele
+
+    ctx_s = _multicopy_inside_pass(
+        clamped, locus, n_copies, mu_all, mu2_all, minall, maxall, window_margin
+    )
+    if ctx_s is None:
+        return 0.0
+    P1_S = float(np.sum(ctx_s.beta[0]))
+    return P1_S / P1
+
+
+def compute_at_least_one_match_exact(
+    males:         list[Male],
+    loci:          list[str],
+    mu:            float = DEFAULT_MU,
+    two_step_frac: float = 0.0,
+    minall:        int   = MINALL,
+    maxall:        int   = MAXALL,
+    window_margin: int   = _WINDOW_MARGIN,
+    max_candidates: int  = 20,
+) -> float:
+    """Exact i-MP via full inclusion-exclusion (equation 13) -- a
+    non-sampling cross-check for :func:`compute_at_least_one_match`.
+
+    Every term ``P(all of S match)`` is computed exactly, with no
+    sampling error, via one clamped peel per locus per subset
+    (:func:`_clamped_all_match_prob`, equation 14), and combined with
+    inclusion-exclusion signs:
+
+        i-MP = Σ_{∅≠S⊆C} (-1)^(|S|+1) P(all of S match)              (13)
+
+    This is exact for *any* pedigree topology, including candidates that
+    share untyped ancestors (where a naive independence assumption like
+    ``1 - Π(1 - P_i)`` would be wrong). The cost is ``O(2^|C| * loci * n
+    * A)``, so it is only practical for small candidate sets -- use this
+    to validate :func:`compute_at_least_one_match` on small pedigrees
+    (as the technical note's own Section 5 validates its engine: hand
+    derivation, a second implementation, internal consistency), not as
+    a drop-in replacement for it.
+
+    Raises
+    ------
+    ValueError
+        If the number of non-excluded candidates exceeds *max_candidates*.
+    """
+    n = len(males)
+    excluded = np.zeros(n, dtype=bool)
+    loci_used: list[str] = []
+    per_locus_params: list[tuple[str, float, float, int, float]] = []
+
+    for locus in loci:
+        c = _infer_copies(males, locus)
+        mu_all = 1.0 - (1.0 - mu) ** c
+        lmu1 = mu_all * (1.0 - two_step_frac)
+        lmu2 = mu_all * two_step_frac
+
+        ctx = _multicopy_inside_pass(males, locus, c, lmu1, lmu2, minall, maxall, window_margin)
+        if ctx is None:
+            continue
+        P1 = float(np.sum(ctx.beta[0]))
+        if P1 == 0.0:
+            continue
+
+        loci_used.append(locus)
+        per_locus_params.append((locus, lmu1, lmu2, c, P1))
+        for i, g in enumerate(ctx.base):
+            if g is not None and tuple(sorted(g)) != tuple(sorted(ctx.suspect_g)):
+                excluded[i] = True
+
+    if not loci_used:
+        return 0.0
+
+    candidate_mask = ~excluded
+    candidate_mask[0] = False
+    candidates = [i for i in range(n) if candidate_mask[i]]
+
+    known_match = any(
+        all(_to_genotype(males[i].alleles.get(locus, 0)) is not None for locus in loci_used)
+        for i in candidates
+    )
+    if known_match or not candidates:
+        return 1.0 if known_match else 0.0
+
+    if len(candidates) > max_candidates:
+        raise ValueError(
+            f"{len(candidates)} candidates exceeds max_candidates={max_candidates}: "
+            "exact inclusion-exclusion costs O(2^|C|) and is impractical here -- "
+            "use compute_at_least_one_match (exact sampling) instead, or raise "
+            "max_candidates if you are sure."
+        )
+
+    total = 0.0
+    for k in range(1, len(candidates) + 1):
+        for S in combinations(candidates, k):
+            term = 1.0
+            for locus, lmu1, lmu2, c, P1 in per_locus_params:
+                term *= _clamped_all_match_prob(
+                    males, locus, S, P1, lmu1, lmu2, c, minall, maxall, window_margin
+                )
+            total += term if k % 2 == 1 else -term
+
+    return total
