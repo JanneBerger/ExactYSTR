@@ -22,6 +22,17 @@ for every untyped male `i`, via backward (and forward) induction over the
 pedigree tree rather than by enumerating or sampling genotype
 configurations.
 
+It also computes **i-MP**, the probability that *at least one* untyped,
+non-excluded male anywhere in the pedigree matches the suspect at every
+locus simultaneously. This does not factorise across loci (a match
+requires agreement at every marker) or across candidates (they share
+ancestors), so it is obtained by exact sampling from the same
+inside-pass messages used above: each draw is an unweighted, exact
+sample from the true posterior over every male's genotype, and averaging
+the "does anyone match" indicator over many draws gives an unbiased
+estimate with a reportable standard error - no importance weights, no
+tuning parameter, no convergence criterion. See `--at-least-one` below.
+
 ### Mutation model
 
 A one-step symmetric stepwise mutation model is used for each meiosis:
@@ -39,7 +50,7 @@ are integers in a fixed range (default `[3, 30]`).
 
 | File | Description |
 |---|---|
-| `ystr_pedigree.py` | Core algorithm: pedigree data structures, CSV loading, mutation model, and `compute_match_probs_fast` (linear-time inside-outside version). |
+| `ystr_pedigree.py` | Core algorithm: pedigree data structures, CSV loading, mutation model, `compute_match_probs_fast` (linear-time inside-outside version), and `compute_at_least_one_match` (i-MP via exact sampling from the peeling messages). |
 | `cli.py` | Command-line interface for running the calculator on a pedigree CSV file. |
 | `runtime_analysis.py` | Empirical runtime benchmarking script that measures how `compute_match_probs_fast` scales with pedigree size, number of untyped males, allele range, and number of loci, and plots the results. |
 | `Pedigrees/` | Example pedigree CSV files (`A01.csv` … `E02.csv`). |
@@ -79,10 +90,32 @@ Arguments:
 - `PEDIGREE_CSV` - path to the input pedigree CSV file.
 - `--mu` - mutation rate per meiosis (default: `0.1`).
 - `--out` - optional path to write results as CSV instead of only printing them.
+- `--at-least-one` - also compute i-MP, the probability that at least one
+  untyped, non-excluded male anywhere in the pedigree matches the suspect
+  at every locus simultaneously.
+- `--n-samples` - number of posterior family draws used for `--at-least-one`
+  (default: `200000`).
+- `--seed` - random seed for `--at-least-one` (default: nondeterministic).
 
 For each locus found in the file, the CLI prints the average match
 probability across all untyped males, plus the per-male match
 probability.
+
+```bash
+python cli.py Pedigrees/F01.csv --mu 0.1 --at-least-one --n-samples 200000 --seed 42
+```
+
+```
+=== At least one match, i-MP (over 30 loci, 1.8 s) ===
+    i-MP = 0.008360  (se = 4.07e-04, n_samples = 50000)
+    candidates: 11
+```
+
+If a match already exists in the observed data (a typed, matching
+relative), i-MP is reported as exactly `1.0`. If every candidate's
+individual match probability is far below `1/n_samples`, the sampling
+estimate rounds to zero and the CLI instead reports the exact first-order
+approximation `i-MP ≈ Σ_i P_i` (Section 3.2 of the technical note).
 
 ### Runtime analysis
 
