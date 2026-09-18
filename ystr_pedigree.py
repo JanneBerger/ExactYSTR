@@ -314,6 +314,124 @@ def _compute_message(beta: np.ndarray, T: np.ndarray) -> np.ndarray:
 # Core algorithm — multi-copy loci
 # ---------------------------------------------------------------------------
 
+@dataclass
+class _MulticopyInside:
+    """Shared pedigree connectivity + inside (beta) pass for one locus.
+
+    ``c == 1`` covers ordinary single-copy loci as a special case (the
+    "ordered copy-vector" is then just a 1-tuple), so this same structure
+    also backs the exact-sampling code in :func:`sample_locus_matches`
+    for single-copy markers.
+    """
+    c:         int
+    A:         int
+    win_min:   int
+    shape:     tuple[int, ...]
+    T:         np.ndarray
+    base:      list[tuple[int, ...] | None]
+    suspect_g: tuple[int, ...]
+    n:         int
+    sons:      list[list[int]]
+    father:    list[int]
+    beta:      list[np.ndarray]
+    message:   list[np.ndarray]
+    em:        Callable[[tuple[int, ...] | None], np.ndarray]
+
+
+def _multicopy_inside_pass(
+    males:         list[Male],
+    locus:         str,
+    n_copies:      int,
+    mu_all:        float = DEFAULT_MU,
+    mu2_all:       float = DEFAULT_MU2,
+    minall:        int   = MINALL,
+    maxall:        int   = MAXALL,
+    window_margin: int   = _WINDOW_MARGIN,
+) -> _MulticopyInside | None:
+    """Build the pedigree tree and run the inside (beta) sweep for *locus*.
+
+    This is the setup shared by :func:`compute_match_probs_multicopy`
+    (which adds the outside/alpha pass for per-individual match
+    probabilities) and :func:`sample_locus_matches` (which adds the
+    downward/backward sampling pass for the "at least one match"
+    probability). See the module docstring and Sections 2 and 3.2 of
+    the technical note.
+
+    Returns ``None`` if the suspect is untyped at *locus*, or if no
+    allele has been observed at all (mirrors the early-exit conditions
+    of :func:`compute_match_probs_multicopy`).
+    """
+    c = n_copies
+
+    # Per-copy mutation rates (equation 3 of the technical note)
+    mu  = 1.0 - (1.0 - mu_all)  ** (1.0 / c)
+    mu2 = 1.0 - (1.0 - mu2_all) ** (1.0 / c)
+
+    # Normalise allele values
+    base: list[tuple[int, ...] | None] = [
+        _to_genotype(m.alleles.get(locus, 0)) for m in males
+    ]
+    suspect_g = base[0]
+    if suspect_g is None:
+        return None
+
+    # Narrow allele window to observed values ± margin
+    obs_vals = [v for g in base if g is not None for v in g]
+    if not obs_vals:
+        return None
+    win_min = max(minall, min(obs_vals) - window_margin)
+    win_max = min(maxall, max(obs_vals) + window_margin)
+    A = win_max - win_min + 1
+
+    T = _build_T(mu, A, mu2)
+
+    # Pedigree connectivity
+    n        = len(males)
+    id_to_idx = {m.male_id: i for i, m in enumerate(males)}
+    sons:   list[list[int]] = [[] for _ in range(n)]
+    father: list[int]       = [-1] * n
+    for i, m in enumerate(males):
+        if m.father_id in id_to_idx:
+            fi = id_to_idx[m.father_id]
+            if fi >= i:
+                raise ValueError(
+                    "males must be sorted by (generation, male_id): "
+                    f"father at index {fi} appears after child at index {i}"
+                )
+            sons[fi].append(i)
+            father[i] = fi
+
+    shape    = (A,) * c
+    em_cache: dict[tuple[int, ...] | None, np.ndarray] = {}
+
+    def em(g: tuple[int, ...] | None) -> np.ndarray:
+        if g not in em_cache:
+            em_cache[g] = _emission_mask(g, shape, win_min)
+        return em_cache[g]
+
+    # --- inside pass (beta), bottom-up ---
+    beta:    list[np.ndarray] = [np.zeros(shape) for _ in range(n)]
+    message: list[np.ndarray] = [np.zeros(shape) for _ in range(n)]
+
+    for i in range(n - 1, -1, -1):
+        g = base[i]
+        if not sons[i]:
+            beta[i] = em(g).copy()
+        else:
+            val = em(g).copy()
+            for s in sons[i]:
+                val *= message[s]
+            beta[i] = val
+
+        message[i] = _compute_message(beta[i], T)
+
+    return _MulticopyInside(
+        c=c, A=A, win_min=win_min, shape=shape, T=T, base=base,
+        suspect_g=suspect_g, n=n, sons=sons, father=father,
+        beta=beta, message=message, em=em,
+    )
+
+
 def compute_match_probs_multicopy(
     males:         list[Male],
     locus:         str,
@@ -367,69 +485,16 @@ def compute_match_probs_multicopy(
         Returns 0.0 if the suspect is untyped or there are no untyped
         males.
     """
-    c = n_copies
-
-    # Per-copy mutation rates (equation 3 of the technical note)
-    mu  = 1.0 - (1.0 - mu_all)  ** (1.0 / c)
-    mu2 = 1.0 - (1.0 - mu2_all) ** (1.0 / c)
-
-    # Normalise allele values
-    base: list[tuple[int, ...] | None] = [
-        _to_genotype(m.alleles.get(locus, 0)) for m in males
-    ]
-    suspect_g = base[0]
-    if suspect_g is None:
+    ctx = _multicopy_inside_pass(
+        males, locus, n_copies, mu_all, mu2_all, minall, maxall, window_margin
+    )
+    if ctx is None:
         return {}, 0.0
 
-    # Narrow allele window to observed values ± margin
-    obs_vals = [v for g in base if g is not None for v in g]
-    if not obs_vals:
-        return {}, 0.0
-    win_min = max(minall, min(obs_vals) - window_margin)
-    win_max = min(maxall, max(obs_vals) + window_margin)
-    A = win_max - win_min + 1
-
-    T = _build_T(mu, A, mu2)
-
-    # Pedigree connectivity
-    n        = len(males)
-    id_to_idx = {m.male_id: i for i, m in enumerate(males)}
-    sons:   list[list[int]] = [[] for _ in range(n)]
-    father: list[int]       = [-1] * n
-    for i, m in enumerate(males):
-        if m.father_id in id_to_idx:
-            fi = id_to_idx[m.father_id]
-            if fi >= i:
-                raise ValueError(
-                    "males must be sorted by (generation, male_id): "
-                    f"father at index {fi} appears after child at index {i}"
-                )
-            sons[fi].append(i)
-            father[i] = fi
-
-    shape    = (A,) * c
-    em_cache: dict[tuple[int, ...] | None, np.ndarray] = {}
-
-    def em(g: tuple[int, ...] | None) -> np.ndarray:
-        if g not in em_cache:
-            em_cache[g] = _emission_mask(g, shape, win_min)
-        return em_cache[g]
-
-    # --- inside pass (beta), bottom-up ---
-    beta:    list[np.ndarray] = [np.zeros(shape) for _ in range(n)]
-    message: list[np.ndarray] = [np.zeros(shape) for _ in range(n)]
-
-    for i in range(n - 1, -1, -1):
-        g = base[i]
-        if not sons[i]:
-            beta[i] = em(g).copy()
-        else:
-            val = em(g).copy()
-            for s in sons[i]:
-                val *= message[s]
-            beta[i] = val
-
-        message[i] = _compute_message(beta[i], T)
+    n, sons        = ctx.n, ctx.sons
+    beta, message  = ctx.beta, ctx.message
+    em, T          = ctx.em, ctx.T
+    base, shape    = ctx.base, ctx.shape
 
     # --- outside pass (alpha), top-down ---
     alpha: list[np.ndarray] = [np.ones(shape) for _ in range(n)]
@@ -461,7 +526,7 @@ def compute_match_probs_multicopy(
             alpha[i] = _compute_message(outside_excl_i, T)
 
     # --- match probabilities ---
-    suspect_mask = em(suspect_g)
+    suspect_mask = em(ctx.suspect_g)
     P1 = float(np.sum(beta[0] * suspect_mask))
     if P1 == 0.0:
         return {}, 0.0
@@ -661,3 +726,395 @@ def compute_match_probs_fast(
 
     average = sum(match_probs.values()) / len(match_probs) if match_probs else 0.0
     return match_probs, average
+
+
+# ---------------------------------------------------------------------------
+# Core algorithm — "at least one match" (i-MP), Section 3 of the technical
+# note: exact sampling from the peeling messages
+# ---------------------------------------------------------------------------
+
+def _sample_conditional(
+    parent_idx: np.ndarray,
+    beta:       np.ndarray,
+    T:          np.ndarray,
+    c:          int,
+    A:          int,
+    rng:        np.random.Generator,
+) -> np.ndarray:
+    """Draw one child state per sample from equation (18).
+
+    For every sample, decode the father's *flat* ordered-state index,
+    form the child's unnormalised distribution
+
+        T^(c)(x_father -> y) * beta_child(y)
+
+    as the outer product of the per-copy mutation rows ``T[x_a, :]``
+    (the kernel factorises over copy-axes for a *fixed* parent state,
+    Eq. 7) times *beta*, and draw ``y`` from it. Samples that share the
+    same father state are batched into a single vectorised draw.
+
+    Parameters
+    ----------
+    parent_idx : np.ndarray, shape (n_samples,)
+        Flat index (into a length-``A**c`` array) of each sample's
+        already-drawn father state.
+    beta : np.ndarray, shape ``(A,)*c``
+        The child's inside-pass beta array.
+    T : np.ndarray, shape (A, A)
+        Per-copy mutation transition matrix.
+    c, A : int
+        Copy count and per-copy allele-window width.
+
+    Returns
+    -------
+    np.ndarray, shape (n_samples,)
+        Flat index of the sampled child state, one per sample.
+    """
+    n_samples = parent_idx.shape[0]
+    W = A ** c
+    out = np.empty(n_samples, dtype=np.int64)
+
+    unique_vals, inverse = np.unique(parent_idx, return_inverse=True)
+    for u_pos, xf_flat in enumerate(unique_vals):
+        xf = np.unravel_index(int(xf_flat), (A,) * c)
+        vec = T[xf[0], :]
+        for a in range(1, c):
+            vec = np.multiply.outer(vec, T[xf[a], :])
+        unnorm = (vec * beta).reshape(W)
+        total = unnorm.sum()
+        if total <= 0.0:
+            # Numerical safety net only: with P1 > 0 every state reachable
+            # under T from an already-sampled ancestor has positive beta,
+            # so this branch should not trigger in practice.
+            unnorm = beta.reshape(W).copy()
+            total = unnorm.sum()
+        probs = unnorm / total
+        cdf = np.cumsum(probs)
+        cdf[-1] = 1.0  # guard against floating-point round-off
+
+        mask = inverse == u_pos
+        u = rng.random(int(mask.sum()))
+        out[mask] = np.clip(np.searchsorted(cdf, u, side="right"), 0, W - 1)
+
+    return out
+
+
+def sample_locus_matches(
+    males:         list[Male],
+    locus:         str,
+    mu_all:        float = DEFAULT_MU,
+    mu2_all:       float = DEFAULT_MU2,
+    n_copies:      int | None = None,
+    minall:        int   = MINALL,
+    maxall:        int   = MAXALL,
+    window_margin: int   = _WINDOW_MARGIN,
+    n_samples:     int   = 1,
+    rng:           np.random.Generator | None = None,
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Draw exact posterior samples of every male's genotype at *locus*.
+
+    Implements the backward-sampling recursion of Section 3.2 of the
+    technical note ("Route that works: exact sampling from the peeling
+    messages"): the inside (beta) pass is run once, and then *n_samples*
+    independent downward draws are taken,
+
+        P(A_root = x)             ∝ beta_root(x)                (eq. 17)
+        P(A_child = y | A_father) ∝ T(A_father -> y) beta_child(y)  (eq. 18)
+
+    Each draw is an exact, unweighted sample from the true joint
+    posterior of every male's genotype at *locus* given everything
+    observed at *locus* -- no importance weights, no tuning parameter,
+    no burn-in. This is what makes the union event needed for i-MP
+    (equation 12) tractable: markers and individuals no longer need to
+    be handled analytically together, they are simply read off jointly
+    from one consistent set of sampled family trees.
+
+    Because the internal state is the same ordered copy-vector used by
+    :func:`compute_match_probs_multicopy`, this works unchanged for
+    single-copy loci (``n_copies == 1``) and multi-copy loci alike.
+
+    Returns
+    -------
+    matches : np.ndarray[bool], shape (n_samples, len(males))
+        ``matches[s, i]`` is True iff male *i* is untyped at *locus* and
+        his sampled genotype in draw *s* equals the suspect's genotype.
+        For males *typed* at *locus* the column is left at its default
+        of True (their match status there is deterministic -- see
+        ``excluded`` -- so this is a neutral factor when AND-reducing
+        match indicators across several loci).
+    excluded : np.ndarray[bool], shape (len(males),)
+        True for males typed at *locus* whose observed genotype differs
+        from the suspect's. Deterministic (independent of sampling):
+        such a male can never contribute a match at this locus.
+    usable : bool
+        False if the suspect is untyped at *locus*, or the observed
+        data has zero likelihood (P1 == 0) -- the locus carries no
+        usable information and should be skipped by the caller.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    if n_copies is None:
+        n_copies = _infer_copies(males, locus)
+
+    n = len(males)
+    ctx = _multicopy_inside_pass(
+        males, locus, n_copies, mu_all, mu2_all, minall, maxall, window_margin
+    )
+    if ctx is None:
+        return np.zeros((n_samples, n), dtype=bool), np.zeros(n, dtype=bool), False
+
+    P1 = float(np.sum(ctx.beta[0] * ctx.em(ctx.suspect_g)))
+    if P1 == 0.0:
+        return np.zeros((n_samples, n), dtype=bool), np.zeros(n, dtype=bool), False
+
+    suspect_sorted = np.array(sorted(ctx.suspect_g)) - ctx.win_min
+    excluded = np.zeros(n, dtype=bool)
+    for i, g in enumerate(ctx.base):
+        if g is not None and tuple(sorted(g)) != tuple(sorted(ctx.suspect_g)):
+            excluded[i] = True
+
+    W = ctx.A ** ctx.c
+    matches = np.ones((n_samples, n), dtype=bool)
+    sampled_idx: list[np.ndarray] = [np.zeros(0, dtype=np.int64)] * n
+
+    for i in range(n):
+        f = ctx.father[i]
+        if f == -1:
+            # Root: P(A_root = x) ∝ beta_root(x)  (eq. 17). The suspect's
+            # own emission is already folded into beta_root, so this is
+            # automatically restricted to states consistent with him.
+            beta_flat = ctx.beta[i].reshape(W)
+            probs = beta_flat / beta_flat.sum()
+            cdf = np.cumsum(probs)
+            cdf[-1] = 1.0
+            u = rng.random(n_samples)
+            idx = np.clip(np.searchsorted(cdf, u, side="right"), 0, W - 1)
+        else:
+            idx = _sample_conditional(
+                sampled_idx[f], ctx.beta[i], ctx.T, ctx.c, ctx.A, rng
+            )
+        sampled_idx[i] = idx
+
+        if ctx.base[i] is None:  # untyped here -> record this draw's match status
+            coords = np.stack(np.unravel_index(idx, ctx.shape), axis=-1)  # (n_samples, c)
+            sorted_coords = np.sort(coords, axis=-1)
+            matches[:, i] = np.all(sorted_coords == suspect_sorted[np.newaxis, :], axis=-1)
+
+    return matches, excluded, True
+
+
+@dataclass
+class AtLeastOneMatchResult:
+    """Result of :func:`compute_at_least_one_match`.
+
+    Attributes
+    ----------
+    i_mp : float
+        The estimated "at least one match" probability (equation 12):
+        the probability that *some* non-excluded, untyped male in the
+        pedigree matches the suspect at every locus in ``loci_used``
+        simultaneously.
+    se : float | None
+        Monte-Carlo standard error of ``i_mp``, ``sqrt(p(1-p)/n_samples)``
+        (equation 19). ``None`` when ``i_mp`` was obtained analytically
+        instead (``used_fallback`` or ``known_match`` True), since those
+        values carry no sampling error.
+    n_samples : int
+        Number of independent posterior family draws used.
+    loci_used : list[str]
+        Loci that actually contributed (the suspect must be typed, and
+        the observed data must have nonzero likelihood, at each).
+    candidates : list[int]
+        ``male_id`` of every non-excluded candidate (untyped at ``>= 1``
+        locus in ``loci_used``, and not ruled out by a mismatching typed
+        locus) -- the set ``C`` of equation (12).
+    candidate_probs : dict[int, float]
+        ``male_id -> P_i``, the exact individual match probability
+        (product over ``loci_used`` of the per-locus match probability),
+        i.e. the terms of the first-order inclusion-exclusion sum
+        (equation 13).
+    used_fallback : bool
+        True if the sampling estimate rounded to exactly zero (it cannot
+        resolve probabilities below ``1/n_samples``) and ``i_mp`` was
+        instead taken from the first-order approximation
+        ``i_mp ≈ sum(candidate_probs.values())``, which is accurate
+        precisely in that regime (Section 3.2, "One limitation, with a
+        clean remedy").
+    fallback_estimate : float | None
+        The first-order estimate, always computed for reference even
+        when not used as ``i_mp``.
+    known_match : bool
+        True if some non-excluded candidate is already fully typed
+        (matching) at every locus in ``loci_used`` -- i.e. a match is
+        already present in the observed data, so ``i_mp == 1.0`` exactly.
+    """
+    i_mp:              float
+    se:                float | None
+    n_samples:         int
+    loci_used:         list[str]
+    candidates:        list[int]
+    candidate_probs:   dict[int, float]
+    used_fallback:     bool
+    fallback_estimate: float | None
+    known_match:       bool
+
+
+def compute_at_least_one_match(
+    males:         list[Male],
+    loci:          list[str],
+    mu:            float = DEFAULT_MU,
+    two_step_frac: float = 0.0,
+    n_samples:     int   = 200_000,
+    minall:        int   = MINALL,
+    maxall:        int   = MAXALL,
+    window_margin: int   = _WINDOW_MARGIN,
+    seed:          int | None = None,
+) -> AtLeastOneMatchResult:
+    """Exact-sampling estimate of i-MP, the "at least one match" probability.
+
+    Implements Section 3 of the technical note, "Obstacle 2: 'at least
+    one match'". Let ``t`` be the suspect's profile and ``C`` the set of
+    untyped, non-excluded candidates. i-MP is
+
+        i-MP = P(exists i in C: male i matches t at every locus)      (12)
+
+    This does not factorise across loci (a match requires agreement at
+    *every* marker) or across candidates (they share ancestors), so it
+    cannot be obtained from the per-locus, per-individual match
+    probabilities alone. Instead, for each locus, one exact posterior
+    sample of the *whole* pedigree's genotypes is drawn (via
+    :func:`sample_locus_matches`) for each of ``n_samples`` independent
+    draws; because markers mutate independently (equation 1), combining
+    one independent draw per locus for each draw index yields an exact
+    joint draw of every candidate's per-locus match status. AND-ing
+    across loci gives each candidate's full-profile match indicator for
+    that draw, OR-ing across candidates gives the "at least one match"
+    indicator, and averaging over draws gives an unbiased estimate of
+    i-MP with no importance weights and no convergence criterion
+    (equation 19).
+
+    When every candidate's individual match probability is minute, the
+    sampling estimate can round to zero (it cannot resolve probabilities
+    below ``1/n_samples``); in that regime the first-order
+    inclusion-exclusion term ``i-MP ≈ sum_i P_i`` (equation 13) is used
+    instead, exactly as prescribed in Section 3.2.
+
+    Parameters
+    ----------
+    males, minall, maxall, window_margin :
+        As elsewhere in this module.
+    loci : list[str]
+        Loci to combine; a locus is skipped (and omitted from
+        ``loci_used``) if the suspect is untyped there.
+    mu : float
+        Per-copy mutation rate (matching the CLI's ``--mu``). The
+        per-locus all-copy rate ``mu_all = 1 - (1 - mu)**c`` is derived
+        automatically for each locus from its copy count.
+    two_step_frac : float
+        Fraction of each locus's mutations that are two-step.
+    n_samples : int
+        Number of independent posterior family draws.
+    seed : int | None
+        Seed for the random number generator, for reproducibility.
+
+    Returns
+    -------
+    AtLeastOneMatchResult
+    """
+    rng = np.random.default_rng(seed)
+    n = len(males)
+
+    excluded      = np.zeros(n, dtype=bool)
+    joint_matches = np.ones((n_samples, n), dtype=bool)
+    per_locus_probs: dict[str, dict[int, float]] = {}
+    loci_used: list[str] = []
+
+    for locus in loci:
+        c = _infer_copies(males, locus)
+        mu_all = 1.0 - (1.0 - mu) ** c
+        lmu1 = mu_all * (1.0 - two_step_frac)
+        lmu2 = mu_all * two_step_frac
+
+        matches, excl, usable = sample_locus_matches(
+            males, locus, mu_all=lmu1, mu2_all=lmu2, n_copies=c,
+            minall=minall, maxall=maxall, window_margin=window_margin,
+            n_samples=n_samples, rng=rng,
+        )
+        if not usable:
+            continue
+
+        loci_used.append(locus)
+        excluded |= excl
+        joint_matches &= matches
+
+        mp, _avg = compute_match_probs_fast(
+            males, locus, lmu1, mu2=lmu2, minall=minall, maxall=maxall
+        )
+        per_locus_probs[locus] = mp
+
+    if not loci_used:
+        return AtLeastOneMatchResult(
+            i_mp=0.0, se=None, n_samples=n_samples, loci_used=[],
+            candidates=[], candidate_probs={}, used_fallback=False,
+            fallback_estimate=None, known_match=False,
+        )
+
+    joint_matches &= ~excluded[np.newaxis, :]
+
+    candidate_mask = ~excluded
+    candidate_mask[0] = False  # the suspect is never his own candidate
+    candidates = [i for i in range(n) if candidate_mask[i]]
+
+    # A candidate who is fully typed (matching) at every locus considered
+    # is not a probabilistic candidate at all: the match already exists
+    # in the observed data, so i-MP is exactly 1.
+    known_match = any(
+        all(_to_genotype(males[i].alleles.get(locus, 0)) is not None for locus in loci_used)
+        for i in candidates
+    )
+
+    candidate_probs: dict[int, float] = {}
+    for i in candidates:
+        p = 1.0
+        for locus in loci_used:
+            mp = per_locus_probs[locus]
+            if i in mp:
+                p *= mp[i]
+            # else: male i is typed (and, since not excluded, matching)
+            # at this locus -- a deterministic factor of 1.
+        candidate_probs[males[i].male_id] = p
+
+    if known_match or not candidates:
+        return AtLeastOneMatchResult(
+            i_mp=1.0 if known_match else 0.0, se=0.0,
+            n_samples=n_samples, loci_used=loci_used,
+            candidates=[males[i].male_id for i in candidates],
+            candidate_probs=candidate_probs,
+            used_fallback=False, fallback_estimate=None,
+            known_match=known_match,
+        )
+
+    any_match = joint_matches[:, candidates].any(axis=1)
+    p_hat = float(any_match.mean())
+
+    used_fallback = False
+    fallback_estimate = sum(candidate_probs.values())
+    if p_hat == 0.0:
+        # Sampling resolution limit (Section 3.2): with n samples, i-MP
+        # below ~1/n reads as exactly zero. The individual probabilities
+        # are then tiny and effectively independent, so the first-order
+        # inclusion-exclusion term is accurate to second order.
+        used_fallback = True
+        i_mp = fallback_estimate
+        se = None
+    else:
+        i_mp = p_hat
+        se = float(np.sqrt(p_hat * (1.0 - p_hat) / n_samples))
+
+    return AtLeastOneMatchResult(
+        i_mp=i_mp, se=se, n_samples=n_samples, loci_used=loci_used,
+        candidates=[males[i].male_id for i in candidates],
+        candidate_probs=candidate_probs,
+        used_fallback=used_fallback, fallback_estimate=fallback_estimate,
+        known_match=False,
+    )

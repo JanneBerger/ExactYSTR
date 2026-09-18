@@ -30,6 +30,7 @@ from ystr_pedigree import (
     MINALL,
     MAXALL,
     _infer_copies,
+    compute_at_least_one_match,
     compute_match_probs_fast,
     load_pedigree_from_csv,
 )
@@ -68,10 +69,41 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Write results to this CSV file instead of stdout.",
     )
+    parser.add_argument(
+        "--at-least-one",
+        action="store_true",
+        help=(
+            "Also compute i-MP, the probability that at least one untyped, "
+            "non-excluded male anywhere in the pedigree matches the suspect "
+            "at every locus simultaneously (exact sampling from the peeling "
+            "messages; see the technical note, Section 3)."
+        ),
+    )
+    parser.add_argument(
+        "--n-samples",
+        type=int,
+        default=200_000,
+        metavar="N",
+        help="Number of posterior family draws used for --at-least-one.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for --at-least-one (default: nondeterministic).",
+    )
     return parser.parse_args()
 
 
-def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | None) -> None:
+def run(
+    pedigree_path: str,
+    mu: float,
+    two_step_frac: float,
+    out_path: str | None,
+    at_least_one: bool = False,
+    n_samples: int = 200_000,
+    seed: int | None = None,
+) -> None:
     males, loci = load_pedigree_from_csv(pedigree_path)
     print(f"Loaded {len(males)} males, {len(loci)} loci from '{pedigree_path}'")
     print(f"Mutation rate:  mu = {mu}  (per copy)")
@@ -149,11 +181,40 @@ def run(pedigree_path: str, mu: float, two_step_frac: float, out_path: str | Non
                 ])
         print(f"Results written to '{out_path}'")
 
+    if at_least_one:
+        t0 = time.perf_counter()
+        result = compute_at_least_one_match(
+            males, loci, mu=mu, two_step_frac=two_step_frac,
+            n_samples=n_samples, seed=seed,
+        )
+        elapsed = time.perf_counter() - t0
+        t_str = f"{elapsed*1000:.1f} ms" if elapsed < 1 else f"{elapsed:.3f} s"
+
+        print(f"=== At least one match, i-MP (over {len(result.loci_used)} loci, {t_str}) ===")
+        if result.known_match:
+            print("    a typed, matching relative is already present in the data")
+            print(f"    i-MP = {result.i_mp:.6f}  (exact)")
+        elif not result.candidates:
+            print("    no untyped, non-excluded candidates")
+            print(f"    i-MP = {result.i_mp:.6f}  (exact)")
+        elif result.used_fallback:
+            print(f"    i-MP = {result.i_mp:.6e}  "
+                  f"(first-order inclusion-exclusion; below sampling resolution "
+                  f"1/{n_samples})")
+        else:
+            print(f"    i-MP = {result.i_mp:.6f}  (se = {result.se:.2e}, "
+                  f"n_samples = {n_samples})")
+        print(f"    candidates: {len(result.candidates)}")
+        print()
+
 
 def main() -> None:
     args = parse_args()
     try:
-        run(args.pedigree, args.mu, args.two_step_frac, args.out)
+        run(
+            args.pedigree, args.mu, args.two_step_frac, args.out,
+            at_least_one=args.at_least_one, n_samples=args.n_samples, seed=args.seed,
+        )
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)

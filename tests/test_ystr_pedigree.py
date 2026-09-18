@@ -9,14 +9,17 @@ Focus areas:
 import glob
 import os
 
+import numpy as np
 import pytest
 
 from ystr_pedigree import (
     Male,
+    compute_at_least_one_match,
     compute_match_probs_fast,
     compute_match_probs_multicopy,
     load_pedigree_from_csv,
     make_stepwise_mutation_model,
+    sample_locus_matches,
 )
 
 PEDIGREE_DIR = os.path.join(os.path.dirname(__file__), "..", "Pedigrees")
@@ -264,3 +267,151 @@ def test_multicopy_per_copy_rate_conversion():
 
     # Each copy must stay at 12: (1-mu_per_copy)^2 = 0.9^2 = 0.81
     assert mp[1] == pytest.approx(0.81, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# "At least one match" (i-MP): exact sampling from the peeling messages
+# ---------------------------------------------------------------------------
+
+def test_sample_locus_matches_matches_analytic_single_copy():
+    # D01: suspect (13) -> two untyped -> typed descendant (13), mu=0.1.
+    # The sampled match rate for each untyped male must converge to the
+    # exact analytic match probability (law of large numbers).
+    males, _ = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "D01.csv"))
+    mp, _ = compute_match_probs_fast(males, "M1", mu=0.1)
+
+    rng = np.random.default_rng(0)
+    matches, excluded, usable = sample_locus_matches(
+        males, "M1", mu_all=0.1, n_samples=100_000, rng=rng
+    )
+    assert usable
+    assert not excluded.any()
+    for i, p in mp.items():
+        assert matches[:, i].mean() == pytest.approx(p, abs=0.01)
+
+
+def test_sample_locus_matches_multicopy_matches_analytic():
+    # Section 2.3 crossing-term example: father (11,12), mu_pc=0.1 -> exact
+    # MP = 0.8125.  The sampled rate must converge to the same value.
+    mu_all = 1.0 - (1.0 - 0.1) ** 2
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"L": (11, 12)}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
+    ]
+    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=mu_all)
+
+    rng = np.random.default_rng(1)
+    matches, excluded, usable = sample_locus_matches(
+        males, "L", mu_all=mu_all, n_copies=2, n_samples=100_000, rng=rng
+    )
+    assert usable
+    assert not excluded.any()
+    assert matches[:, 1].mean() == pytest.approx(mp[1], abs=0.01)
+
+
+def test_sample_locus_matches_flags_typed_mismatch_as_excluded():
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"M1": 13}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"M1": 14}),  # 1-step mismatch
+    ]
+    matches, excluded, usable = sample_locus_matches(
+        males, "M1", mu_all=0.1, n_samples=100
+    )
+    assert usable
+    assert excluded.tolist() == [False, True]
+
+
+def test_at_least_one_match_two_independent_sons_union_formula():
+    # Two untyped sons of a typed suspect, single locus. Given the root,
+    # their alleles are conditionally independent, so
+    # i-MP = 1 - (1-p)^2 where p is each son's individual match probability.
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"M1": 13}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"M1": 0}),
+        Male(male_id=3, generation=1, father_id=1,  alleles={"M1": 0}),
+    ]
+    mp, _ = compute_match_probs_fast(males, "M1", mu=0.1)
+    p = mp[1]
+    expected = 1.0 - (1.0 - p) ** 2
+
+    res = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=100_000, seed=0)
+    assert not res.used_fallback
+    assert res.i_mp == pytest.approx(expected, abs=0.01)
+    assert res.se is not None and res.se > 0
+
+
+def test_at_least_one_match_known_match_is_exactly_one():
+    # D01: the typed descendant already matches the suspect, so a match
+    # is already present in the observed data -- i-MP must be exactly 1,
+    # with no sampling error, regardless of n_samples.
+    males, _ = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "D01.csv"))
+    res = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=10, seed=0)
+    assert res.known_match
+    assert res.i_mp == 1.0
+    assert res.se == 0.0
+
+
+def test_at_least_one_match_no_untyped_males_is_zero():
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"M1": 13}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"M1": 13}),
+    ]
+    res = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=100, seed=0)
+    assert res.known_match
+    assert res.i_mp == 1.0
+    assert res.candidates == [2]
+
+
+def test_at_least_one_match_excludes_typed_mismatch_at_other_locus():
+    # Male 2 is untyped at A but typed-and-mismatching at B (1-step off),
+    # so he can never match at both loci simultaneously and must be
+    # excluded from the candidate set entirely.
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"A": 13, "B": 20}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"A": 0,  "B": 21}),
+    ]
+    res = compute_at_least_one_match(males, ["A", "B"], mu=0.1, n_samples=5000, seed=0)
+    assert res.candidates == []
+    assert res.i_mp == 0.0
+
+
+def test_at_least_one_match_fallback_matches_first_order_sum():
+    # A single untyped son, but many loci each with a small per-locus
+    # match probability (mu=0.7 -> P(no mutation)=0.3 per locus), so the
+    # combined probability (0.3**10 ~ 5.9e-6) is far below the sampling
+    # resolution of n_samples=1000 -- the estimator must fall back to the
+    # first-order inclusion-exclusion sum (here just P_i, one candidate).
+    loci = [f"L{k}" for k in range(10)]
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={loc: 13 for loc in loci}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={loc: 0 for loc in loci}),
+    ]
+    res = compute_at_least_one_match(males, loci, mu=0.7, n_samples=1000, seed=0)
+    assert res.used_fallback
+    assert res.se is None
+    expected = 0.3 ** 10
+    assert res.i_mp == pytest.approx(expected, rel=1e-9)
+    assert res.candidate_probs[2] == pytest.approx(expected, rel=1e-9)
+
+
+def test_at_least_one_match_no_usable_loci_returns_zero():
+    # Suspect untyped at the only locus -> nothing can be computed.
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"M1": 0}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"M1": 13}),
+    ]
+    res = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=100, seed=0)
+    assert res.loci_used == []
+    assert res.candidates == []
+    assert res.i_mp == 0.0
+
+
+def test_at_least_one_match_reproducible_with_seed():
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"M1": 13}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"M1": 0}),
+        Male(male_id=3, generation=1, father_id=1,  alleles={"M1": 0}),
+    ]
+    res_a = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=5000, seed=123)
+    res_b = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=5000, seed=123)
+    assert res_a.i_mp == res_b.i_mp
