@@ -53,6 +53,7 @@ are integers in a fixed range (default `[3, 30]`).
 | `ystr_pedigree.py` | Core algorithm: pedigree data structures, CSV loading, mutation model, `compute_match_probs_fast` (linear-time inside-outside version), and `compute_at_least_one_match` (i-MP via exact sampling from the peeling messages). |
 | `cli.py` | Command-line interface for running the calculator on a pedigree CSV file. |
 | `runtime_analysis.py` | Empirical runtime benchmarking script that measures how `compute_match_probs_fast` scales with pedigree size, number of untyped males, allele range, and number of loci, and plots the results. |
+| `validate_i_mp.py` | Validation script comparing exact vs. sampled i-MP (and the naive independence formula) across all example pedigrees; see "Validation evidence" below. |
 | `Pedigrees/` | Example pedigree CSV files (`A01.csv` … `E02.csv`). |
 | `LICENSE.txt` | MIT license. |
 
@@ -150,6 +151,27 @@ given the typed suspect (e.g. two sons with no shared untyped ancestor,
 single locus), i-MP also has a simple closed form you can check by hand:
 `i-MP = 1 - Π_i (1 - P_i)`, with each `P_i` from `compute_match_probs_fast`
 / `compute_match_probs_multicopy`.
+
+### Validation evidence across the example pedigrees
+
+`validate_i_mp.py` runs this comparison across every pedigree in
+`Pedigrees/` (the same set used to validate the per-individual match
+probability engine) and prints a summary table:
+
+```bash
+python validate_i_mp.py --n-samples 500000 --out i_mp_validation.csv
+```
+
+For each pedigree it reports the exact i-MP (when the candidate count
+is small enough for brute-force inclusion-exclusion), the sampled i-MP
+with its standard error, the resulting z-score, and the naive
+independence value `1 - Π(1 - P_i)`. This mirrors the technical note's
+own validation methodology (Section 5): "two independent
+implementations" is the exact peel vs. the sampling estimator, and the
+z-scores staying within a few standard deviations is the "internal
+consistency" check. It also reports how many pedigrees make the naive
+independence formula measurably wrong — exactly those where two
+candidates share an untyped common ancestor.
 
 ### Runtime analysis
 
