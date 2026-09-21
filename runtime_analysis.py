@@ -66,8 +66,7 @@ SEED    = 22112000     # base seed; placement k uses SEED + k
 
 N_SEEDS_MC  = 5            # fewer seeds for the expensive c-sweep
 SUSPECT_MC  = 16           # allele carried by the suspect in multicopy experiments
-_MARGIN_MC  = 5            # window_margin used inside compute_match_probs_multicopy
-A_MC        = 2 * _MARGIN_MC + 1   # effective allele window size = 11
+A_MC        = MAXALL - MINALL + 1  # full allele range used per copy (no window narrowing)
 
 TOPOLOGIES = {
     "Linear chain (1 son)":  1,
@@ -334,7 +333,8 @@ def print_complexity_summary():
     print("  Theoretical complexity: O(n · c · A^c)  per locus")
     print("  n = number of males in pedigree")
     print("  c = number of copies  (1 = single-copy, 2 = DYS385, …)")
-    print("  A = allele window size (≈ 2·margin + observed allele range)")
+    print("  A = allele range (maxall - minall + 1); the full range is")
+    print("      used for every copy, so the result is exact")
     print()
     print("  Inside pass  : O(c · A^c)  per male")
     print("  Outside pass : O(c · A^c)  per male   [same kernel, T symmetric]")
@@ -346,10 +346,10 @@ def print_complexity_summary():
     for n in (50, 100, 200, 500):
         print(f"    {n:>6}  {n * 28:>12,}")
     print()
-    print("  Multi-copy (c=2, A=12, window_margin=5):")
+    print(f"  Multi-copy (c=2, A={A_MC}):")
     print(f"    {'n':>6}  {'A^c':>6}  {'ops/locus':>12}")
     for n in (10, 50, 200):
-        print(f"    {n:>6}  {12**2:>6}  {n * 2 * 12**2:>12,}")
+        print(f"    {n:>6}  {A_MC**2:>6}  {n * 2 * A_MC**2:>12,}")
     print("=" * 62)
     print()
 
