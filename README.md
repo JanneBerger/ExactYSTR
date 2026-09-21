@@ -52,8 +52,10 @@ are integers in a fixed range (default `[3, 30]`).
 |---|---|
 | `ystr_pedigree.py` | Core algorithm: pedigree data structures, CSV loading, mutation model, `compute_match_probs_fast` (linear-time inside-outside version), and `compute_at_least_one_match` (i-MP via exact sampling from the peeling messages). |
 | `cli.py` | Command-line interface for running the calculator on a pedigree CSV file. |
-| `runtime_analysis.py` | Empirical runtime benchmarking script that measures how `compute_match_probs_fast` scales with pedigree size, number of untyped males, allele range, and number of loci, and plots the results. |
-| `Pedigrees/` | Example pedigree CSV files (`A01.csv` … `E02.csv`). |
+| `runtime_analysis.py` | Empirical runtime benchmarking script that measures how `compute_match_probs_fast` scales with pedigree size, number of untyped males, allele range, number of loci, and number of multi-copy loci, and plots the results. |
+| `compare_exact_vs_sampled.py` | Validates the shipped i-MP sampling estimator against an exact, non-sampling reference (full inclusion-exclusion) for the example pedigrees. |
+| `derive_multicopy_analytic.py` | Independently re-derives closed-form match-probability formulas for two-copy analogues of pedigrees A-E and cross-checks them against `compute_match_probs_multicopy`. |
+| `Pedigrees/` | Example pedigree CSV files: single-copy `A01.csv` … `F01.csv`, and their two-copy (DYS385-like) analogues `MCA01.csv` … `MCE02.csv`. |
 | `LICENSE.txt` | MIT license. |
 
 ## Pedigree CSV format
@@ -139,8 +141,10 @@ factors of 3 and 5), and saves a 4-panel figure to
 
 ## Requirements
 
-- Python 3.10+ (standard library only, for `ystr_pedigree.py` and `cli.py`)
-- `numpy` and `matplotlib` (only for `runtime_analysis.py`)
+- Python 3.10+
+- `numpy` (required by `ystr_pedigree.py` and `cli.py`, for multi-copy markers and i-MP sampling)
+- `matplotlib` (only for `runtime_analysis.py`)
+- `sympy` (only for `derive_multicopy_analytic.py`)
 
 ## License
 
