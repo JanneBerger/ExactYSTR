@@ -3,7 +3,7 @@
 derive_multicopy_analytic.py
 =============================
 Independently derives closed-form match-probability formulas for
-two-copy (c=2) analogues of the single-copy pedigrees A-E (Figure 1 /
+two-copy (c=2) analogues of the single-copy pedigrees A-C (Figure 1 /
 Table 2), and cross-checks them against the shipped implementation
 (`compute_match_probs_multicopy` in ystr_pedigree.py).
 
@@ -24,15 +24,19 @@ avoids ever building the full (A^2 x A^2) transition matrix.
 
 Pedigree design
 ----------------
-All eight pedigrees use a heterozygous suspect with adjacent DYS385
-alleles (13,14), mirroring the single-copy A-E examples. "Same"-typed
-leaves carry the suspect's own genotype (13,14); "mutant"-typed leaves
-carry the homozygous genotype (14,14) -- unambiguous (unlike a
-heterozygous leaf, whose own copy-to-allele mapping is itself unknown
-and would have to be marginalized over), and reachable from the
-suspect's alleles by exactly one one-step mutation per copy. mu (the
-code's all-copy rate) is chosen so that the per-copy, unidirectional
-mutation rate equals z=0.05, matching Table 2 (mu_all = 1-(1-2z)^2).
+A01_mc2, B01_mc, C01_mc, and C02_mc use a heterozygous suspect with
+adjacent alleles, mirroring the single-copy A-C examples; A01_mc1 uses
+a homozygous suspect instead. C01_mc's typed son carries the suspect's
+own genotype; C02_mc's typed son carries a homozygous genotype --
+unambiguous (unlike a heterozygous son, whose own copy-to-allele
+mapping is itself unknown and would have to be marginalized over), and
+reachable from the suspect's alleles by exactly one one-step mutation
+per copy. mu (the code's all-copy rate) is chosen so that the per-copy,
+unidirectional mutation rate equals z=0.05, matching Table 2
+(mu_all = 1-(1-2z)^2). The symbolic derivation below uses its own
+representative allele values (13,14 / 14,14 / 13,13); by the model's
+translation invariance, the resulting formulas apply unchanged to the
+different allele values actually used in the CSV files.
 
 Usage
 -----
@@ -134,58 +138,36 @@ def match_prob_formula(tree, obs, query_node, target):
 
 
 # ---------------------------------------------------------------------------
-# The eight pedigrees, their trees/observations, and formula derivation
+# The pedigrees, their trees/observations, and formula derivation
 # ---------------------------------------------------------------------------
 
 SUSPECT_SET = (13, 14)
+HOMOZYGOUS = (13, 13)
 MUTANT = (14, 14)
 
 _TREE_CHAIN2 = {1: None, 2: 1}
 _TREE_CHAIN3 = {1: None, 2: 1, 3: 2}
-_TREE_CHAIN4 = {1: None, 2: 1, 3: 2, 4: 3}
-_TREE_BRANCH = {1: None, 2: 1, 3: 2, 5: 2, 4: 3}
 
 CASES = [
-    # (csv file, male_id queried, tree, obs, description)
-    ("MCA01.csv", 2, _TREE_CHAIN2,
-     {1: SUSPECT_SET, 2: None},
-     "A: suspect -> untyped son"),
-    ("MCB01.csv", 2, _TREE_CHAIN3,
-     {1: SUSPECT_SET, 2: None, 3: None},
+    # (csv file, male_id queried, tree, obs, target, description)
+    ("A01_mc1.csv", 2, _TREE_CHAIN2,
+     {1: HOMOZYGOUS, 2: None}, HOMOZYGOUS,
+     "A (homozygous): suspect -> untyped son"),
+    ("A01_mc2.csv", 2, _TREE_CHAIN2,
+     {1: SUSPECT_SET, 2: None}, SUSPECT_SET,
+     "A (heterozygous): suspect -> untyped son"),
+    ("B01_mc.csv", 2, _TREE_CHAIN3,
+     {1: SUSPECT_SET, 2: None, 3: None}, SUSPECT_SET,
      "B: suspect -> untyped -> untyped, query son"),
-    ("MCB01.csv", 3, _TREE_CHAIN3,
-     {1: SUSPECT_SET, 2: None, 3: None},
+    ("B01_mc.csv", 3, _TREE_CHAIN3,
+     {1: SUSPECT_SET, 2: None, 3: None}, SUSPECT_SET,
      "B: suspect -> untyped -> untyped, query grandson"),
-    ("MCC01.csv", 3, _TREE_CHAIN3,
-     {1: SUSPECT_SET, 2: SUSPECT_SET, 3: None},
+    ("C01_mc.csv", 3, _TREE_CHAIN3,
+     {1: SUSPECT_SET, 2: SUSPECT_SET, 3: None}, SUSPECT_SET,
      "C-same: suspect -> typed(=suspect) -> untyped"),
-    ("MCC02.csv", 3, _TREE_CHAIN3,
-     {1: SUSPECT_SET, 2: MUTANT, 3: None},
+    ("C02_mc.csv", 3, _TREE_CHAIN3,
+     {1: SUSPECT_SET, 2: MUTANT, 3: None}, SUSPECT_SET,
      "C-mutant: suspect -> typed(14,14) -> untyped"),
-    ("MCD01.csv", 2, _TREE_CHAIN4,
-     {1: SUSPECT_SET, 2: None, 3: None, 4: SUSPECT_SET},
-     "D-same: query son (leaf typed = suspect)"),
-    ("MCD01.csv", 3, _TREE_CHAIN4,
-     {1: SUSPECT_SET, 2: None, 3: None, 4: SUSPECT_SET},
-     "D-same: query grandson (leaf typed = suspect)"),
-    ("MCD02.csv", 2, _TREE_CHAIN4,
-     {1: SUSPECT_SET, 2: None, 3: None, 4: MUTANT},
-     "D-mutant: query son (leaf typed = 14,14)"),
-    ("MCD02.csv", 3, _TREE_CHAIN4,
-     {1: SUSPECT_SET, 2: None, 3: None, 4: MUTANT},
-     "D-mutant: query grandson (leaf typed = 14,14)"),
-    ("MCE01.csv", 2, _TREE_BRANCH,
-     {1: SUSPECT_SET, 2: None, 3: None, 5: SUSPECT_SET, 4: SUSPECT_SET},
-     "E-same: query son (both leaves typed = suspect)"),
-    ("MCE01.csv", 3, _TREE_BRANCH,
-     {1: SUSPECT_SET, 2: None, 3: None, 5: SUSPECT_SET, 4: SUSPECT_SET},
-     "E-same: query middle untyped (both leaves typed = suspect)"),
-    ("MCE02.csv", 2, _TREE_BRANCH,
-     {1: SUSPECT_SET, 2: None, 3: None, 5: MUTANT, 4: MUTANT},
-     "E-mutant: query son (both leaves typed = 14,14)"),
-    ("MCE02.csv", 3, _TREE_BRANCH,
-     {1: SUSPECT_SET, 2: None, 3: None, 5: MUTANT, 4: MUTANT},
-     "E-mutant: query middle untyped (both leaves typed = 14,14)"),
 ]
 
 MU_ALL = 1.0 - (1.0 - 2 * 0.05) ** 2   # 0.19; per-copy unidirectional z=0.05
@@ -196,8 +178,8 @@ def main():
           f"{'ES algorithm':>13s}  match")
     print("-" * 115)
     all_ok = True
-    for fname, male_id, tree, obs, desc in CASES:
-        formula = match_prob_formula(tree, obs, male_id, SUSPECT_SET)
+    for fname, male_id, tree, obs, target, desc in CASES:
+        formula = match_prob_formula(tree, obs, male_id, target)
         analytic = float(formula.subs(z, sp.Rational(1, 20)))
 
         males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, fname))
