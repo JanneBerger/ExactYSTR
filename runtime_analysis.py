@@ -47,7 +47,6 @@ import matplotlib.ticker as ticker
 from ystr_pedigree import (
     Male,
     compute_match_probs_fast as compute_match_probs,
-    compute_match_probs_multicopy,
     MINALL,
     MAXALL,
     DEFAULT_MU,
@@ -148,13 +147,19 @@ def generate_pedigree(n: int, n_untyped: int, branching: int,
     return males
 
 
-def generate_multicopy_pedigree(
+def generate_mixed_pedigree(
     n: int, n_untyped: int, branching: int,
-    locus: str, n_copies: int,
+    single_loci: list[str], multi_loci: list[str], n_copies: int,
     suspect_allele: int = SUSPECT_MC,
     seed: int = SEED,
 ) -> list[Male]:
-    """Like generate_pedigree but typed males carry a tuple allele of length n_copies."""
+    """Pedigree with some single-copy and some multi-copy loci.
+
+    Typed males carry the (same) suspect allele at every ``single_loci``
+    locus, and a tuple of ``n_copies`` copies of that allele at every
+    ``multi_loci`` locus. The same set of untyped males applies at every
+    locus.
+    """
     rng     = random.Random(seed)
     untyped = set(rng.sample(range(1, n), min(n_untyped, n - 1)))
 
@@ -166,12 +171,16 @@ def generate_multicopy_pedigree(
         while j > 0:
             j = (j - 1) // branching
             generation += 1
-        allele = 0 if i in untyped else tuple([suspect_allele] * n_copies)
+        alleles = {loc: (0 if i in untyped else suspect_allele) for loc in single_loci}
+        alleles.update({
+            loc: (0 if i in untyped else tuple([suspect_allele] * n_copies))
+            for loc in multi_loci
+        })
         males.append(Male(
             male_id    = i,
             generation = generation,
             father_id  = father_id,
-            alleles    = {locus: allele},
+            alleles    = alleles,
         ))
 
     males.sort(key=lambda m: (m.generation, m.male_id))
@@ -291,35 +300,21 @@ def experiment_L(Ls, n=50, u=25):
     return run_experiment("L", Ls, build)
 
 
-def experiment_c(cs, n=50, u=25):
-    print(f"[5/5] Sweep: copy count c  (n={n}, u={u}, A={A_MC}, {N_SEEDS_MC} placements/point)")
+def experiment_mc_count(ks, n=50, u=25, total_loci=30, c=2):
+    print(f"[5/5] Sweep: number of multi-copy loci out of {total_loci}  "
+          f"(n={n}, u={u}, A={A_MC}, c={c} per multi-copy locus, "
+          f"{N_SEEDS_MC} placements/point)")
 
-    means = {name: [] for name in TOPOLOGIES}
-    stds  = {name: [] for name in TOPOLOGIES}
-
-    for c in cs:
-        for name, branching in TOPOLOGIES.items():
-            placement_times = []
-            for k in range(N_SEEDS_MC):
-                males = generate_multicopy_pedigree(
-                    n, u, branching, LOCUS, c, seed=SEED + k
-                )
-                t = measure(
-                    compute_match_probs_multicopy,
-                    males, LOCUS, c, MU,
-                    repeats=REPEATS,
-                )
-                placement_times.append(t)
-            means[name].append(float(np.mean(placement_times)))
-            stds[name].append(float(np.std(placement_times)))
-
-        vals = "  ".join(
-            f"{name.split()[0][0]}={means[name][-1]:.1f}±{stds[name][-1]:.1f}ms"
-            for name in TOPOLOGIES
+    def build(k, branching, seed):
+        loci        = [f"L{i}" for i in range(total_loci)]
+        multi_loci  = loci[:k]
+        single_loci = loci[k:]
+        males = generate_mixed_pedigree(
+            n, u, branching, single_loci, multi_loci, c, seed=seed
         )
-        print(f"  c={c:>2}   {vals}")
+        return [(males, loc, MU, MINALL, MAXALL) for loc in loci]
 
-    return means, stds
+    return run_experiment("mc", ks, build, n_seeds=N_SEEDS_MC)
 
 
 # ---------------------------------------------------------------------------
@@ -462,7 +457,7 @@ def plot_panel(ax, xs, results, stds, xlabel, panel_label,
 
 
 def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A,
-                Ls, res_L, std_L, cs, res_c, std_c):
+                Ls, res_L, std_L, ks, res_c, std_c):
     plt.rcParams.update({
         "font.family":      "serif",
         "font.size":        10,
@@ -505,29 +500,24 @@ def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A,
                theory_fn=lambda x: x,
                theory_label="theory: $O(L)$")
 
-    plot_panel(axes[1, 1], cs, res_c, std_c,
-               xlabel="Number of copies  $c$",
+    plot_panel(axes[1, 1], ks, res_c, std_c,
+               xlabel="Number of multi-copy loci  (of 30)",
                panel_label="e",
-               fixed_params=f"$n_{{tot}} = 50$,  $n_{{unt}} = 25$,  $A = {A_MC}$",
-               linear_fit=False,
-               yscale="log",
-               xticks=cs,
-               theory_fn=lambda c: c * A_MC ** c,
-               theory_label=f"theory: $O(c \\cdot A^c)$,  $A={A_MC}$")
+               fixed_params=(f"$n_{{tot}} = 50$,  $n_{{unt}} = 25$,  "
+                              f"$A = {A_MC}$,  $c = 2$ per locus"),
+               y_zero_bottom=False)
 
     # Unused 6th slot in the 2x3 grid
     axes[1, 2].axis("off")
 
-    # Shared legend: topology series + theory entries (panels a and e
-    # have different theory curves, so pull both sets of handles)
-    handles_a, labels_a = axes[0, 0].get_legend_handles_labels()
-    handles_e, labels_e = axes[1, 1].get_legend_handles_labels()
-    handles = handles_a + [h for h, l in zip(handles_e, labels_e) if l not in labels_a]
-    labels  = labels_a  + [l for l in labels_e if l not in labels_a]
+    # Shared legend: topology series + one theory entry (from panel a);
+    # panel e has no global theory line (its baseline cost, from the
+    # remaining single-copy loci, does not pass through the origin)
+    handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels,
                loc="lower center",
                bbox_to_anchor=(0.5, 0.01),
-               ncol=5,
+               ncol=4,
                fontsize=9,
                frameon=False)
 
@@ -551,13 +541,13 @@ if __name__ == "__main__":
     us = [1, 2, 5, 10, 20, 30, 50, 75, 100, 125, 150, 175, 199]
     As = [4, 6, 8, 10, 14, 18, 22, 26, 28]
     Ls = [1, 2, 3, 5, 8, 10, 15, 20]
-    cs = [1, 2, 3, 4]
+    ks = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     res_n, std_n = experiment_n(ns)
     res_u, std_u = experiment_u(us)
     res_A, std_A = experiment_A(As)
     res_L, std_L = experiment_L(Ls)
-    res_c, std_c = experiment_c(cs)
+    res_c, std_c = experiment_mc_count(ks)
 
     make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A,
-                Ls, res_L, std_L, cs, res_c, std_c)
+                Ls, res_L, std_L, ks, res_c, std_c)
