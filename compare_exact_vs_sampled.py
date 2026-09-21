@@ -37,7 +37,6 @@ from ystr_pedigree import (
     _infer_copies,
     _multicopy_inside_pass,
     _to_genotype,
-    _WINDOW_MARGIN,
     compute_at_least_one_match,
     load_pedigree_from_csv,
 )
@@ -52,7 +51,7 @@ AF_NAMES = ["A01", "B01", "C01", "C02", "D01", "D02", "E01", "E02", "F01"]
 # ---------------------------------------------------------------------------
 
 def _clamped_all_match_prob(males, locus, candidate_idx, P1, mu_all, mu2_all,
-                             n_copies, minall, maxall, window_margin):
+                             n_copies, minall, maxall):
     """P(every male in candidate_idx matches the suspect at locus), by
     clamping them to the suspect's observed genotype and re-peeling."""
     if not candidate_idx:
@@ -62,7 +61,7 @@ def _clamped_all_match_prob(males, locus, candidate_idx, P1, mu_all, mu2_all,
     for i in candidate_idx:
         clamped[i].alleles[locus] = suspect_allele
     ctx_s = _multicopy_inside_pass(
-        clamped, locus, n_copies, mu_all, mu2_all, minall, maxall, window_margin
+        clamped, locus, n_copies, mu_all, mu2_all, minall, maxall
     )
     if ctx_s is None:
         return 0.0
@@ -71,7 +70,7 @@ def _clamped_all_match_prob(males, locus, candidate_idx, P1, mu_all, mu2_all,
 
 def compute_at_least_one_match_exact(
     males, loci, mu=DEFAULT_MU, two_step_frac=0.0,
-    minall=MINALL, maxall=MAXALL, window_margin=_WINDOW_MARGIN, max_candidates=20,
+    minall=MINALL, maxall=MAXALL, max_candidates=20,
 ):
     """Exact i-MP via full inclusion-exclusion (equation 13). Cost is
     O(2^|candidates|) -- practical only for small candidate sets."""
@@ -86,7 +85,7 @@ def compute_at_least_one_match_exact(
         lmu1 = mu_all * (1.0 - two_step_frac)
         lmu2 = mu_all * two_step_frac
 
-        ctx = _multicopy_inside_pass(males, locus, c, lmu1, lmu2, minall, maxall, window_margin)
+        ctx = _multicopy_inside_pass(males, locus, c, lmu1, lmu2, minall, maxall)
         if ctx is None:
             continue
         P1 = float(np.sum(ctx.beta[0]))
@@ -122,7 +121,7 @@ def compute_at_least_one_match_exact(
             term = 1.0
             for locus, lmu1, lmu2, c, P1 in per_locus_params:
                 term *= _clamped_all_match_prob(
-                    males, locus, S, P1, lmu1, lmu2, c, minall, maxall, window_margin
+                    males, locus, S, P1, lmu1, lmu2, c, minall, maxall
                 )
             total += term if k % 2 == 1 else -term
     return total

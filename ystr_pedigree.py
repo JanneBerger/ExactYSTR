@@ -82,7 +82,6 @@ MINALL: int   = 3      # Lower bound of allele range (inclusive)
 MAXALL: int   = 30     # Upper bound of allele range (inclusive)
 DEFAULT_MU: float  = 0.1   # Default one-step mutation rate per meiosis
 DEFAULT_MU2: float = 0.0   # Default two-step mutation rate per meiosis
-_WINDOW_MARGIN: int = 5  # Allele window half-width for multi-copy markers
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +345,6 @@ def _multicopy_inside_pass(
     mu2_all:       float = DEFAULT_MU2,
     minall:        int   = MINALL,
     maxall:        int   = MAXALL,
-    window_margin: int   = _WINDOW_MARGIN,
 ) -> _MulticopyInside | None:
     """Build the pedigree tree and run the inside (beta) sweep for *locus*.
 
@@ -375,12 +373,14 @@ def _multicopy_inside_pass(
     if suspect_g is None:
         return None
 
-    # Narrow allele window to observed values ± margin
+    # Use the full allele range so that the calculation is exact rather
+    # than an approximation restricted to a window around the observed
+    # alleles.
     obs_vals = [v for g in base if g is not None for v in g]
     if not obs_vals:
         return None
-    win_min = max(minall, min(obs_vals) - window_margin)
-    win_max = min(maxall, max(obs_vals) + window_margin)
+    win_min = minall
+    win_max = maxall
     A = win_max - win_min + 1
 
     T = _build_T(mu, A, mu2)
@@ -440,7 +440,6 @@ def compute_match_probs_multicopy(
     mu2_all:       float = DEFAULT_MU2,
     minall:        int   = MINALL,
     maxall:        int   = MAXALL,
-    window_margin: int   = _WINDOW_MARGIN,
 ) -> tuple[dict[int, float], float]:
     """Exact match probabilities for a multi-copy locus.
 
@@ -468,12 +467,10 @@ def compute_match_probs_multicopy(
         Converted internally to per-copy rate
         ``mu = 1 - (1 - mu_all)**(1/c)``.
     minall, maxall : int
-        Global allele bounds; may be tightened by *window_margin*.
-    window_margin : int
-        Half-width of the allele window centred on observed alleles.
-        Reducing the window shrinks the state space from
-        ``(maxall - minall + 1)^c`` to roughly ``(2*window_margin)^c``,
-        making *c = 3* and *c = 4* copy-counts practical.
+        Global allele bounds. The full range is used (no window
+        narrowing around observed alleles), so the state space is
+        exactly ``(maxall - minall + 1)^c`` and the result is exact,
+        not an approximation.
 
     Returns
     -------
@@ -486,7 +483,7 @@ def compute_match_probs_multicopy(
         males.
     """
     ctx = _multicopy_inside_pass(
-        males, locus, n_copies, mu_all, mu2_all, minall, maxall, window_margin
+        males, locus, n_copies, mu_all, mu2_all, minall, maxall
     )
     if ctx is None:
         return {}, 0.0
@@ -807,7 +804,6 @@ def sample_locus_matches(
     n_copies:      int | None = None,
     minall:        int   = MINALL,
     maxall:        int   = MAXALL,
-    window_margin: int   = _WINDOW_MARGIN,
     n_samples:     int   = 1,
     rng:           np.random.Generator | None = None,
 ) -> tuple[np.ndarray, np.ndarray, bool]:
@@ -858,7 +854,7 @@ def sample_locus_matches(
 
     n = len(males)
     ctx = _multicopy_inside_pass(
-        males, locus, n_copies, mu_all, mu2_all, minall, maxall, window_margin
+        males, locus, n_copies, mu_all, mu2_all, minall, maxall
     )
     if ctx is None:
         return np.zeros((n_samples, n), dtype=bool), np.zeros(n, dtype=bool), False
@@ -967,7 +963,6 @@ def compute_at_least_one_match(
     n_samples:     int   = 200_000,
     minall:        int   = MINALL,
     maxall:        int   = MAXALL,
-    window_margin: int   = _WINDOW_MARGIN,
     seed:          int | None = None,
 ) -> AtLeastOneMatchResult:
     """Exact-sampling estimate of i-MP, the "at least one match" probability.
@@ -1001,7 +996,7 @@ def compute_at_least_one_match(
 
     Parameters
     ----------
-    males, minall, maxall, window_margin :
+    males, minall, maxall :
         As elsewhere in this module.
     loci : list[str]
         Loci to combine; a locus is skipped (and omitted from
@@ -1037,7 +1032,7 @@ def compute_at_least_one_match(
 
         matches, excl, usable = sample_locus_matches(
             males, locus, mu_all=lmu1, mu2_all=lmu2, n_copies=c,
-            minall=minall, maxall=maxall, window_margin=window_margin,
+            minall=minall, maxall=maxall,
             n_samples=n_samples, rng=rng,
         )
         if not usable:
