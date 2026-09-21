@@ -41,7 +41,6 @@ from ystr_pedigree import (
     Male,
     _infer_copies,
     _multicopy_inside_pass,
-    _to_genotype,
     compute_at_least_one_match,
     load_pedigree_from_csv,
 )
@@ -85,7 +84,7 @@ def compute_at_least_one_match_exact(
     """Exact i-MP via full inclusion-exclusion (equation 13). Cost is
     O(2^|candidates|) -- practical only for small candidate sets."""
     n = len(males)
-    excluded = np.zeros(n, dtype=bool)
+    typed_anywhere = np.zeros(n, dtype=bool)
     loci_used = []
     per_locus_params = []
 
@@ -105,22 +104,22 @@ def compute_at_least_one_match_exact(
         loci_used.append(locus)
         per_locus_params.append((locus, lmu1, lmu2, c, P1))
         for i, g in enumerate(ctx.base):
-            if g is not None and tuple(sorted(g)) != tuple(sorted(ctx.suspect_g)):
-                excluded[i] = True
+            if g is not None:
+                typed_anywhere[i] = True
 
     if not loci_used:
         return 0.0
 
-    candidate_mask = ~excluded
+    # A candidate must be untyped at every locus considered: a male typed
+    # at even one such locus is either ruled out (if mismatching) or
+    # already a known match there, so i-MP is a statement about untyped
+    # relatives only (matches compute_at_least_one_match's definition).
+    candidate_mask = ~typed_anywhere
     candidate_mask[0] = False
     candidates = [i for i in range(n) if candidate_mask[i]]
 
-    known_match = any(
-        all(_to_genotype(males[i].alleles.get(locus, 0)) is not None for locus in loci_used)
-        for i in candidates
-    )
-    if known_match or not candidates:
-        return 1.0 if known_match else 0.0
+    if not candidates:
+        return 0.0
 
     if len(candidates) > max_candidates:
         raise ValueError(f"{len(candidates)} candidates exceeds max_candidates={max_candidates}")

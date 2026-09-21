@@ -913,7 +913,7 @@ class AtLeastOneMatchResult:
     se : float | None
         Monte-Carlo standard error of ``i_mp``, ``sqrt(p(1-p)/n_samples)``
         (equation 19). ``None`` when ``i_mp`` was obtained analytically
-        instead (``used_fallback`` or ``known_match`` True), since those
+        instead (``used_fallback`` True, or no candidates), since those
         values carry no sampling error.
     n_samples : int
         Number of independent posterior family draws used.
@@ -921,9 +921,13 @@ class AtLeastOneMatchResult:
         Loci that actually contributed (the suspect must be typed, and
         the observed data must have nonzero likelihood, at each).
     candidates : list[int]
-        ``male_id`` of every non-excluded candidate (untyped at ``>= 1``
-        locus in ``loci_used``, and not ruled out by a mismatching typed
-        locus) -- the set ``C`` of equation (12).
+        ``male_id`` of every candidate male: untyped at *every* locus in
+        ``loci_used`` (a male typed at even one such locus is already
+        either ruled out, if mismatching, or a known match there, and
+        either way contributes no uncertainty) -- the set ``C`` of
+        equation (12). i-MP is therefore, by construction, a statement
+        about untyped relatives only, never about matches already
+        established by typing.
     candidate_probs : dict[int, float]
         ``male_id -> P_i``, the exact individual match probability
         (product over ``loci_used`` of the per-locus match probability),
@@ -939,10 +943,6 @@ class AtLeastOneMatchResult:
     fallback_estimate : float | None
         The first-order estimate, always computed for reference even
         when not used as ``i_mp``.
-    known_match : bool
-        True if some non-excluded candidate is already fully typed
-        (matching) at every locus in ``loci_used`` -- i.e. a match is
-        already present in the observed data, so ``i_mp == 1.0`` exactly.
     """
     i_mp:              float
     se:                float | None
@@ -952,7 +952,6 @@ class AtLeastOneMatchResult:
     candidate_probs:   dict[int, float]
     used_fallback:     bool
     fallback_estimate: float | None
-    known_match:       bool
 
 
 def compute_at_least_one_match(
@@ -1020,6 +1019,7 @@ def compute_at_least_one_match(
     n = len(males)
 
     excluded      = np.zeros(n, dtype=bool)
+    typed_anywhere = np.zeros(n, dtype=bool)
     joint_matches = np.ones((n_samples, n), dtype=bool)
     per_locus_probs: dict[str, dict[int, float]] = {}
     loci_used: list[str] = []
@@ -1041,6 +1041,9 @@ def compute_at_least_one_match(
         loci_used.append(locus)
         excluded |= excl
         joint_matches &= matches
+        typed_anywhere |= np.array([
+            _to_genotype(m.alleles.get(locus, 0)) is not None for m in males
+        ])
 
         mp, _avg = compute_match_probs_fast(
             males, locus, lmu1, mu2=lmu2, minall=minall, maxall=maxall
@@ -1051,42 +1054,32 @@ def compute_at_least_one_match(
         return AtLeastOneMatchResult(
             i_mp=0.0, se=None, n_samples=n_samples, loci_used=[],
             candidates=[], candidate_probs={}, used_fallback=False,
-            fallback_estimate=None, known_match=False,
+            fallback_estimate=None,
         )
 
     joint_matches &= ~excluded[np.newaxis, :]
 
-    candidate_mask = ~excluded
+    # A candidate must be untyped at *every* locus in loci_used: a male
+    # typed at even one such locus contributes no uncertainty there (he
+    # is either ruled out, if mismatching, or already a known match),
+    # so i-MP is a statement about untyped relatives only.
+    candidate_mask = ~typed_anywhere
     candidate_mask[0] = False  # the suspect is never his own candidate
     candidates = [i for i in range(n) if candidate_mask[i]]
 
-    # A candidate who is fully typed (matching) at every locus considered
-    # is not a probabilistic candidate at all: the match already exists
-    # in the observed data, so i-MP is exactly 1.
-    known_match = any(
-        all(_to_genotype(males[i].alleles.get(locus, 0)) is not None for locus in loci_used)
+    candidate_probs: dict[int, float] = {
+        males[i].male_id: float(np.prod([
+            per_locus_probs[locus][i] for locus in loci_used
+        ]))
         for i in candidates
-    )
+    }
 
-    candidate_probs: dict[int, float] = {}
-    for i in candidates:
-        p = 1.0
-        for locus in loci_used:
-            mp = per_locus_probs[locus]
-            if i in mp:
-                p *= mp[i]
-            # else: male i is typed (and, since not excluded, matching)
-            # at this locus -- a deterministic factor of 1.
-        candidate_probs[males[i].male_id] = p
-
-    if known_match or not candidates:
+    if not candidates:
         return AtLeastOneMatchResult(
-            i_mp=1.0 if known_match else 0.0, se=0.0,
+            i_mp=0.0, se=0.0,
             n_samples=n_samples, loci_used=loci_used,
-            candidates=[males[i].male_id for i in candidates],
-            candidate_probs=candidate_probs,
+            candidates=[], candidate_probs={},
             used_fallback=False, fallback_estimate=None,
-            known_match=known_match,
         )
 
     any_match = joint_matches[:, candidates].any(axis=1)
@@ -1111,5 +1104,4 @@ def compute_at_least_one_match(
         candidates=[males[i].male_id for i in candidates],
         candidate_probs=candidate_probs,
         used_fallback=used_fallback, fallback_estimate=fallback_estimate,
-        known_match=False,
     )
