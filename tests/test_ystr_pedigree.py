@@ -109,12 +109,12 @@ def test_stepwise_mutation_model_probabilities():
 # Multi-copy CSV loading
 # ---------------------------------------------------------------------------
 
-def test_load_multicopy_csv_mc01():
-    males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "MC01.csv"))
+def test_load_multicopy_csv_mca01():
+    males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "MCA01.csv"))
 
     assert loci == ["DYS385"]
     assert len(males) == 2
-    assert males[0].alleles == {"DYS385": (10, 11)}   # suspect, typed
+    assert males[0].alleles == {"DYS385": (13, 14)}   # suspect, typed
     assert males[1].alleles == {"DYS385": 0}           # untyped (int 0)
 
 
@@ -191,8 +191,8 @@ def test_multicopy_dispatch_via_fast():
 
 
 def test_multicopy_dispatch_via_csv():
-    # End-to-end: load MC01.csv (suspect + 1 untyped) and run through normal API.
-    males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "MC01.csv"))
+    # End-to-end: load MCA01.csv (suspect + 1 untyped) and run through normal API.
+    males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "MCA01.csv"))
     mp, avg = compute_match_probs_fast(males, "DYS385", mu=0.0)
 
     assert mp.keys() == {1}         # index 1 is the one untyped male
@@ -267,6 +267,55 @@ def test_multicopy_per_copy_rate_conversion():
 
     # Each copy must stay at 12: (1-mu_per_copy)^2 = 0.9^2 = 0.81
     assert mp[1] == pytest.approx(0.81, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Multi-copy analogues of pedigrees A-E, verified against independently
+# derived closed-form formulas (see derive_multicopy_analytic.py).
+#
+# All eight pedigrees use a heterozygous suspect with adjacent DYS385
+# alleles (13,14), mirroring the single-copy A-E examples (Figure 1 /
+# Table 2), with mu (the code's all-copy rate) chosen so that the
+# per-copy, unidirectional mutation rate equals z=0.05 (i.e. mu_all =
+# 1-(1-2z)^2 = 0.19), matching the z=0.05 used throughout Table 2.
+#
+# "Same"-typed leaves carry the suspect's own genotype (13,14); "mutant"-
+# typed leaves carry the homozygous genotype (14,14) -- unambiguous
+# (unlike a heterozygous leaf, whose own internal copy-to-allele mapping
+# is itself unknown and must be marginalized over), and reachable from
+# the suspect's alleles by exactly one one-step mutation per copy.
+# ---------------------------------------------------------------------------
+
+MC_MU_ALL = 1.0 - (1.0 - 2 * 0.05) ** 2   # 0.19; per-copy unidirectional z=0.05
+
+
+@pytest.mark.parametrize("fname,male_id,expected", [
+    # Pedigree A analogue: suspect -> 1 untyped son.
+    ("MCA01.csv", 2, 0.8125),
+    # Pedigree B analogue: suspect -> untyped -> untyped.
+    ("MCB01.csv", 2, 0.8125),
+    ("MCB01.csv", 3, 0.672325),
+    # Pedigree C analogue: suspect -> typed son -> untyped grandson.
+    ("MCC01.csv", 3, 0.8125),      # son typed identical to suspect
+    ("MCC02.csv", 3, 0.09),        # son typed homozygous mutant (14,14)
+    # Pedigree D analogue: suspect -> untyped -> untyped -> typed.
+    ("MCD01.csv", 2, 0.964859),
+    ("MCD01.csv", 3, 0.964859),
+    ("MCD02.csv", 2, 0.658586),
+    ("MCD02.csv", 3, 0.334334),
+    # Pedigree E analogue: suspect -> untyped -> {untyped -> typed, typed}.
+    ("MCE01.csv", 2, 0.996662),
+    ("MCE01.csv", 3, 0.980286),
+    ("MCE02.csv", 2, 0.099686),
+    ("MCE02.csv", 3, 0.055203),
+])
+def test_multicopy_AE_analogues_match_analytic_formula(fname, male_id, expected):
+    males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, fname))
+    id_to_idx = {m.male_id: i for i, m in enumerate(males)}
+    mp, _ = compute_match_probs_multicopy(
+        males, loci[0], n_copies=2, mu_all=MC_MU_ALL,
+    )
+    assert mp[id_to_idx[male_id]] == pytest.approx(expected, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
