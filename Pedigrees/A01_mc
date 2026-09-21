@@ -1,0 +1,3 @@
+male_id,generation,father_id,allele_M1
+1,0,-1,10;11
+2,1,1,0
