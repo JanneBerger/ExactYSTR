@@ -164,7 +164,10 @@ def run(mu: float, n_samples: int, seed: int) -> list[dict]:
             sampled=sampled.i_mp, se=sampled.se, t_sampled=t_sampled,
             diff=diff, z=z,
         ))
-    return rows
+    # Pedigrees with a single candidate are not informative for validating
+    # the sampling estimator against the exact one (inclusion-exclusion is
+    # trivial with one term), so only keep those with >= 2 candidates.
+    return [r for r in rows if r["candidates"] >= 2]
 
 
 def _fmt_t(t: float) -> str:
@@ -193,8 +196,7 @@ def print_table(rows: list[dict]) -> None:
 
 
 def write_csv(rows: list[dict], out_path: str) -> None:
-    fieldnames = ["pedigree", "n", "loci", "candidates", "exact", "sampled",
-                  "diff", "z", "t_exact", "t_sampled", "se"]
+    fieldnames = ["pedigree", "exact", "sampled", "z"]
     with open(out_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
