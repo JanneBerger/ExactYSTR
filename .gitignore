@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+
+# Generated benchmark figure (reproduced by runtime_analysis.py)
+runtime_analysis.png
+runtime_analysis.pdf
+runtime_analysis.svg
