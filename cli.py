@@ -191,11 +191,8 @@ def run(
         t_str = f"{elapsed*1000:.1f} ms" if elapsed < 1 else f"{elapsed:.3f} s"
 
         print(f"=== At least one match, i-MP (over {len(result.loci_used)} loci, {t_str}) ===")
-        if result.known_match:
-            print("    a typed, matching relative is already present in the data")
-            print(f"    i-MP = {result.i_mp:.6f}  (exact)")
-        elif not result.candidates:
-            print("    no untyped, non-excluded candidates")
+        if not result.candidates:
+            print("    no untyped candidates")
             print(f"    i-MP = {result.i_mp:.6f}  (exact)")
         elif result.used_fallback:
             print(f"    i-MP = {result.i_mp:.6e}  "

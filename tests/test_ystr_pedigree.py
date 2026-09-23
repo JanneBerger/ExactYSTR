@@ -381,26 +381,30 @@ def test_at_least_one_match_two_independent_sons_union_formula():
     assert res.se is not None and res.se > 0
 
 
-def test_at_least_one_match_known_match_is_exactly_one():
-    # D01: the typed descendant already matches the suspect, so a match
-    # is already present in the observed data -- i-MP must be exactly 1,
-    # with no sampling error, regardless of n_samples.
+def test_at_least_one_match_typed_matching_descendant_is_not_a_candidate():
+    # D01: individual 4 is typed and already matches the suspect, but
+    # i-MP is defined over untyped candidates only, so he does not make
+    # i-MP trivially 1 -- only the two untyped individuals (2, 3) count,
+    # and i-MP is their real "at least one matches" probability.
     males, _ = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, "D01.csv"))
-    res = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=10, seed=0)
-    assert res.known_match
-    assert res.i_mp == 1.0
-    assert res.se == 0.0
+    res = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=200_000, seed=0)
+    assert res.candidates == [2, 3]
+    assert res.i_mp == pytest.approx(0.993939, abs=0.01)
+    assert res.se is not None and res.se > 0
 
 
 def test_at_least_one_match_no_untyped_males_is_zero():
+    # Both males are typed (and match); with no untyped candidates,
+    # i-MP is exactly 0 -- a match already present in the typed data is
+    # not what i-MP measures.
     males = [
         Male(male_id=1, generation=0, father_id=-1, alleles={"M1": 13}),
         Male(male_id=2, generation=1, father_id=1,  alleles={"M1": 13}),
     ]
     res = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=100, seed=0)
-    assert res.known_match
-    assert res.i_mp == 1.0
-    assert res.candidates == [2]
+    assert res.i_mp == 0.0
+    assert res.se == 0.0
+    assert res.candidates == []
 
 
 def test_at_least_one_match_excludes_typed_mismatch_at_other_locus():
