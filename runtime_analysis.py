@@ -47,6 +47,7 @@ import matplotlib.ticker as ticker
 from ystr_pedigree import (
     Male,
     compute_match_probs_fast as compute_match_probs,
+    compute_match_probs_multicopy,
     compute_at_least_one_match,
     MINALL,
     MAXALL,
@@ -314,20 +315,54 @@ def experiment_L(Ls, n=50, u=25):
 
 
 def experiment_mc_count(ks, n=50, u=25, total_loci=30, c=2):
+    """Sweep the number of multi-copy loci out of total_loci.
+
+    Both single-copy (n_copies=1) and multi-copy (n_copies=c) loci are
+    run through the *same* numpy-vectorized compute_match_probs_multicopy
+    code path here (rather than single-copy going through the separate
+    pure-Python compute_match_probs_fast fast path used elsewhere in this
+    script). This isolates the actual cost of the larger multi-copy state
+    space from implementation differences between the two code paths.
+    """
     print(f"[5/5] Sweep: number of multi-copy loci out of {total_loci}  "
           f"(n={n}, u={u}, A={A_MC}, c={c} per multi-copy locus, "
-          f"{N_SEEDS_MC} placements/point)")
+          f"same numpy code path for all loci, {N_SEEDS_MC} placements/point)")
 
-    def build(k, branching, seed):
-        loci        = [f"L{i}" for i in range(total_loci)]
-        multi_loci  = loci[:k]
-        single_loci = loci[k:]
-        males = generate_mixed_pedigree(
-            n, u, branching, single_loci, multi_loci, c, seed=seed
+    means = {name: [] for name in TOPOLOGIES}
+    stds  = {name: [] for name in TOPOLOGIES}
+
+    for k in ks:
+        for name, branching in TOPOLOGIES.items():
+            placement_times = []
+            for seed_i in range(N_SEEDS_MC):
+                loci        = [f"L{i}" for i in range(total_loci)]
+                multi_loci  = loci[:k]
+                single_loci = loci[k:]
+                males = generate_mixed_pedigree(
+                    n, u, branching, single_loci, multi_loci, c, seed=SEED + seed_i
+                )
+
+                def call(males=males, single_loci=single_loci, multi_loci=multi_loci):
+                    for loc in single_loci:
+                        compute_match_probs_multicopy(
+                            males, loc, 1, mu_all=MU, minall=MINALL, maxall=MAXALL
+                        )
+                    for loc in multi_loci:
+                        compute_match_probs_multicopy(
+                            males, loc, c, mu_all=MU, minall=MINALL, maxall=MAXALL
+                        )
+
+                placement_times.append(measure(call, repeats=REPEATS))
+            means[name].append(float(np.mean(placement_times)))
+            stds[name].append(float(np.std(placement_times)))
+
+        vals = "  ".join(
+            f"{name.split()[0][0]}={means[name][-1]:.1f}±{stds[name][-1]:.1f}ms"
+            for name in TOPOLOGIES
         )
-        return [(males, loc, MU, MINALL, MAXALL) for loc in loci]
+        print(f"  mc={str(k):>5}   {vals}")
 
-    return run_experiment("mc", ks, build, n_seeds=N_SEEDS_MC)
+    return means, stds
 
 
 def experiment_imp_candidates(ns: list[int]):
