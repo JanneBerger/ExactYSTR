@@ -47,10 +47,12 @@ import matplotlib.ticker as ticker
 from ystr_pedigree import (
     Male,
     compute_match_probs_fast as compute_match_probs,
+    compute_at_least_one_match,
     MINALL,
     MAXALL,
     DEFAULT_MU,
 )
+from compare_exact_vs_sampled import compute_at_least_one_match_exact
 
 sys.setrecursionlimit(500_000)
 
@@ -66,6 +68,9 @@ SEED    = 22112000     # base seed; placement k uses SEED + k
 N_SEEDS_MC  = 5            # fewer seeds for the expensive c-sweep
 SUSPECT_MC  = 16           # allele carried by the suspect in multicopy experiments
 A_MC        = MAXALL - MINALL + 1  # full allele range used per copy (no window narrowing)
+
+IMP_N_SAMPLES     = 200_000  # posterior draws used by the i-MP sampling estimator
+IMP_MAX_EXACT_N   = 14       # exact inclusion-exclusion cost is O(2^n); kept small
 
 TOPOLOGIES = {
     "Linear chain (1 son)":  1,
@@ -144,6 +149,14 @@ def generate_pedigree(n: int, n_untyped: int, branching: int,
         ))
 
     males.sort(key=lambda m: (m.generation, m.male_id))
+    return males
+
+
+def generate_imp_star_pedigree(n_candidates: int, suspect_allele: int = 16) -> list[Male]:
+    """Suspect (root) with n_candidates untyped sons, all i-MP candidates."""
+    males = [Male(male_id=0, generation=0, father_id=-1, alleles={LOCUS: suspect_allele})]
+    for i in range(1, n_candidates + 1):
+        males.append(Male(male_id=i, generation=1, father_id=0, alleles={LOCUS: 0}))
     return males
 
 
@@ -317,6 +330,37 @@ def experiment_mc_count(ks, n=50, u=25, total_loci=30, c=2):
     return run_experiment("mc", ks, build, n_seeds=N_SEEDS_MC)
 
 
+def experiment_imp_candidates(ns: list[int]):
+    """Sweep the number of untyped i-MP candidates n. The sampling
+    estimator's cost is independent of n; the exact inclusion-exclusion
+    reference costs O(2^n) and is only measured up to IMP_MAX_EXACT_N."""
+    print(f"[6/6] Sweep: number of i-MP candidates n  (single locus, A=28, "
+          f"sampling n_samples={IMP_N_SAMPLES}, exact up to n={IMP_MAX_EXACT_N})")
+    sampled_times: list[float] = []
+    exact_ns: list[int] = []
+    exact_times: list[float] = []
+    for n in ns:
+        males = generate_imp_star_pedigree(n)
+        t_s = measure(
+            lambda: compute_at_least_one_match(
+                males, [LOCUS], mu=MU, n_samples=IMP_N_SAMPLES, seed=SEED
+            ),
+            repeats=REPEATS,
+        )
+        sampled_times.append(t_s)
+        line = f"  n={n:>3}  sampled={t_s:.1f}ms"
+        if n <= IMP_MAX_EXACT_N:
+            t_e = measure(
+                lambda: compute_at_least_one_match_exact(males, [LOCUS], mu=MU),
+                repeats=1,
+            )
+            exact_ns.append(n)
+            exact_times.append(t_e)
+            line += f"  exact={t_e:.1f}ms"
+        print(line)
+    return sampled_times, exact_ns, exact_times
+
+
 # ---------------------------------------------------------------------------
 # Theoretical complexity
 # ---------------------------------------------------------------------------
@@ -456,8 +500,34 @@ def plot_panel(ax, xs, results, stds, xlabel, panel_label,
                 fontsize=8, color="black", va="bottom", ha="right")
 
 
+def plot_imp_panel(ax, ns_sampled, sampled_times, ns_exact, exact_times, panel_label):
+    """Panel f: i-MP runtime vs. number of untyped candidates n.
+
+    Sampling cost is independent of n; exact inclusion-exclusion costs
+    O(2^n) and is only shown up to the last tractable n.
+    """
+    ax.plot(ns_sampled, sampled_times, "o-", color="#542788", linewidth=1.5,
+             markersize=5, label=f"sampling ($n_{{samples}}$={IMP_N_SAMPLES:,})")
+    ax.plot(ns_exact, exact_times, "s--", color="#b2182b", linewidth=1.5,
+             markersize=5, label="exact (inclusion-exclusion)")
+
+    ax.set_xlabel("Number of untyped candidates  $n_{cand}$", fontsize=10)
+    ax.set_ylabel("Runtime (ms)", fontsize=10)
+    ax.set_yscale("log")
+    ax.set_xlim(left=0)
+    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
+    ax.tick_params(labelsize=9)
+    ax.legend(fontsize=8, frameon=False, loc="center left")
+
+    ax.text(-0.24, 1.0, panel_label, transform=ax.transAxes,
+            fontsize=11, fontweight="bold", va="top", ha="right")
+    ax.text(0.97, 0.05, "single locus,  $n_{all} = 28$", transform=ax.transAxes,
+            fontsize=8, color="black", va="bottom", ha="right")
+
+
 def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A,
-                Ls, res_L, std_L, ks, res_c, std_c):
+                Ls, res_L, std_L, ks, res_c, std_c,
+                ns_imp, sampled_imp, ns_exact_imp, exact_imp):
     plt.rcParams.update({
         "font.family":      "serif",
         "font.size":        10,
@@ -507,12 +577,13 @@ def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A,
                               f"$A = {A_MC}$,  $c = 2$ per locus"),
                y_zero_bottom=False)
 
-    # Unused 6th slot in the 2x3 grid
-    axes[1, 2].axis("off")
+    plot_imp_panel(axes[1, 2], ns_imp, sampled_imp, ns_exact_imp, exact_imp,
+                   panel_label="f")
 
     # Shared legend: topology series + one theory entry (from panel a);
     # panel e has no global theory line (its baseline cost, from the
-    # remaining single-copy loci, does not pass through the origin)
+    # remaining single-copy loci, does not pass through the origin); panel f
+    # has its own local legend (sampling vs. exact), not part of this one
     handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels,
                loc="lower center",
@@ -542,12 +613,15 @@ if __name__ == "__main__":
     As = [4, 6, 8, 10, 14, 18, 22, 26, 28]
     Ls = [1, 2, 3, 5, 8, 10, 15, 20]
     ks = [0, 5, 10, 15, 20, 25, 30]
+    ns_imp = [2, 4, 6, 8, 10, 12, 14, 18, 22, 26, 30]
 
     res_n, std_n = experiment_n(ns)
     res_u, std_u = experiment_u(us)
     res_A, std_A = experiment_A(As)
     res_L, std_L = experiment_L(Ls)
     res_c, std_c = experiment_mc_count(ks)
+    sampled_imp, ns_exact_imp, exact_imp = experiment_imp_candidates(ns_imp)
 
     make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A,
-                Ls, res_L, std_L, ks, res_c, std_c)
+                Ls, res_L, std_L, ks, res_c, std_c,
+                ns_imp, sampled_imp, ns_exact_imp, exact_imp)
