@@ -4,7 +4,7 @@ runtime_analysis.py
 Empirical runtime analysis of the Elston-Stewart algorithm.
 
 Measures runtime across four dimensions:
-    (n)  pedigree size          — u = 49,   A = 28, L = 1
+    (n)  pedigree size          — u = 30,   A = 28, L = 1
     (u)  number of untyped males — n = 200,  A = 28, L = 1
     (A)  allele range size       — n = 200,  u = 50, L = 1
     (L)  number of loci          — n = 50,   u = 25, A = 28
@@ -20,6 +20,16 @@ Each experiment is run for three pedigree topologies:
     linear  — each male has exactly one son (chain)
     wide3   — each male has exactly three sons
     wide5   — each male has exactly five sons
+
+On top of these three lines, each panel also shows two overlay series
+along the same x-axis, using a single fixed topology (wide3):
+    multi-copy         — same computation, but for one c=2 locus
+                          (compute_match_probs_multicopy) instead of one
+                          single-copy locus
+    at least one match — the i-MP sampling estimator
+                          (compute_at_least_one_match) over the same
+                          pedigree/loci, with a reduced sample count so
+                          its runtime is on a comparable scale
 
 The script imports directly from ystr_pedigree.py (GitHub implementation).
 Place this file in the same directory as ystr_pedigree.py, or add its
@@ -53,7 +63,6 @@ from ystr_pedigree import (
     MAXALL,
     DEFAULT_MU,
 )
-from compare_exact_vs_sampled import compute_at_least_one_match_exact
 
 sys.setrecursionlimit(500_000)
 
@@ -66,12 +75,14 @@ N_SEEDS = 20            # number of random untyped-placements per data point
 LOCUS   = "L"          # generic locus name
 SEED    = 22112000     # base seed; placement k uses SEED + k
 
-N_SEEDS_MC  = 5            # fewer seeds for the expensive c-sweep
-SUSPECT_MC  = 16           # allele carried by the suspect in multicopy experiments
-A_MC        = MAXALL - MINALL + 1  # full allele range used per copy (no window narrowing)
-
-IMP_N_SAMPLES     = 200_000  # posterior draws used by the i-MP sampling estimator
-IMP_MAX_EXACT_N   = 14       # exact inclusion-exclusion cost is O(2^n); kept small
+N_SEEDS_EXTRA = 5              # fewer seeds for the two overlay series
+SUSPECT_MC    = 16             # allele carried by the suspect in multicopy experiments
+A_MC          = MAXALL - MINALL + 1  # full allele range (no window narrowing)
+MC_COPIES     = 2              # copy count used for the multi-copy overlay series
+IMP_N_SAMPLES = 2_000           # reduced sample count so i-MP runtime is on a
+                                # comparable scale to the other series in these panels
+                                # (the analysis proper defaults to 200,000)
+EXTRA_BRANCHING = 3            # fixed topology (wide3) used for both overlay series
 
 TOPOLOGIES = {
     "Linear chain (1 son)":  1,
@@ -90,6 +101,9 @@ MARKERS_STYLE = {
     "Wide (3 sons)":         "s",
     "Very wide (5 sons)":    "^",
 }
+
+MC_COLOR  = "#542788"   # purple — multi-copy overlay series
+IMP_COLOR = "#e08214"   # orange — at-least-one-match overlay series
 
 
 # ---------------------------------------------------------------------------
@@ -153,14 +167,6 @@ def generate_pedigree(n: int, n_untyped: int, branching: int,
     return males
 
 
-def generate_imp_star_pedigree(n_candidates: int, suspect_allele: int = 16) -> list[Male]:
-    """Suspect (root) with n_candidates untyped sons, all i-MP candidates."""
-    males = [Male(male_id=0, generation=0, father_id=-1, alleles={LOCUS: suspect_allele})]
-    for i in range(1, n_candidates + 1):
-        males.append(Male(male_id=i, generation=1, father_id=0, alleles={LOCUS: 0}))
-    return males
-
-
 def generate_mixed_pedigree(
     n: int, n_untyped: int, branching: int,
     single_loci: list[str], multi_loci: list[str], n_copies: int,
@@ -202,7 +208,7 @@ def generate_mixed_pedigree(
 
 
 # ---------------------------------------------------------------------------
-# Measurement helper
+# Measurement helpers
 # ---------------------------------------------------------------------------
 
 def measure(fn, *args, repeats: int = REPEATS) -> float:
@@ -217,8 +223,25 @@ def measure(fn, *args, repeats: int = REPEATS) -> float:
     return float(np.median(times)) * 1000.0
 
 
+def run_extra_series(xs: list, build_fn, n_seeds: int = N_SEEDS_EXTRA):
+    """Measure one overlay series (not split by topology) across xs,
+    averaged over n_seeds random untyped-placements per data point.
+
+    build_fn(x, seed) -> zero-arg callable to measure.
+    """
+    means, stds = [], []
+    for x in xs:
+        placement_times = [
+            measure(build_fn(x, SEED + k), repeats=REPEATS)
+            for k in range(n_seeds)
+        ]
+        means.append(float(np.mean(placement_times)))
+        stds.append(float(np.std(placement_times)))
+    return means, stds
+
+
 # ---------------------------------------------------------------------------
-# Experiments
+# Experiments — main (per-topology) sweeps
 # ---------------------------------------------------------------------------
 
 def run_experiment(
@@ -314,86 +337,76 @@ def experiment_L(Ls, n=50, u=25):
     return run_experiment("L", Ls, build)
 
 
-def experiment_mc_count(ks, n=50, u=25, total_loci=30, c=2):
-    """Sweep the number of multi-copy loci out of total_loci.
+# ---------------------------------------------------------------------------
+# Experiments — overlay series (multi-copy, at-least-one-match)
+#
+# Each reuses the same swept parameter and fixed values as the matching
+# per-topology experiment above, but with a single fixed topology
+# (EXTRA_BRANCHING).
+# ---------------------------------------------------------------------------
 
-    Both single-copy (n_copies=1) and multi-copy (n_copies=c) loci are
-    run through the *same* numpy-vectorized compute_match_probs_multicopy
-    code path here (rather than single-copy going through the separate
-    pure-Python compute_match_probs_fast fast path used elsewhere in this
-    script). This isolates the actual cost of the larger multi-copy state
-    space from implementation differences between the two code paths.
-    """
-    print(f"[5/5] Sweep: number of multi-copy loci out of {total_loci}  "
-          f"(n={n}, u={u}, A={A_MC}, c={c} per multi-copy locus, "
-          f"same numpy code path for all loci, {N_SEEDS_MC} placements/point)")
-
-    means = {name: [] for name in TOPOLOGIES}
-    stds  = {name: [] for name in TOPOLOGIES}
-
-    for k in ks:
-        for name, branching in TOPOLOGIES.items():
-            placement_times = []
-            for seed_i in range(N_SEEDS_MC):
-                loci        = [f"L{i}" for i in range(total_loci)]
-                multi_loci  = loci[:k]
-                single_loci = loci[k:]
-                males = generate_mixed_pedigree(
-                    n, u, branching, single_loci, multi_loci, c, seed=SEED + seed_i
-                )
-
-                def call(males=males, single_loci=single_loci, multi_loci=multi_loci):
-                    for loc in single_loci:
-                        compute_match_probs_multicopy(
-                            males, loc, 1, mu_all=MU, minall=MINALL, maxall=MAXALL
-                        )
-                    for loc in multi_loci:
-                        compute_match_probs_multicopy(
-                            males, loc, c, mu_all=MU, minall=MINALL, maxall=MAXALL
-                        )
-
-                placement_times.append(measure(call, repeats=REPEATS))
-            means[name].append(float(np.mean(placement_times)))
-            stds[name].append(float(np.std(placement_times)))
-
-        vals = "  ".join(
-            f"{name.split()[0][0]}={means[name][-1]:.1f}±{stds[name][-1]:.1f}ms"
-            for name in TOPOLOGIES
+def overlay_n(ns):
+    def build_mc(n, seed):
+        males = generate_mixed_pedigree(n, 30, EXTRA_BRANCHING, [], [LOCUS], MC_COPIES, seed=seed)
+        return lambda: compute_match_probs_multicopy(
+            males, LOCUS, MC_COPIES, mu_all=MU, minall=MINALL, maxall=MAXALL
         )
-        print(f"  mc={str(k):>5}   {vals}")
-
-    return means, stds
-
-
-def experiment_imp_candidates(ns: list[int]):
-    """Sweep the number of untyped i-MP candidates n. The sampling
-    estimator's cost is independent of n; the exact inclusion-exclusion
-    reference costs O(2^n) and is only measured up to IMP_MAX_EXACT_N."""
-    print(f"[6/6] Sweep: number of i-MP candidates n  (single locus, A=28, "
-          f"sampling n_samples={IMP_N_SAMPLES}, exact up to n={IMP_MAX_EXACT_N})")
-    sampled_times: list[float] = []
-    exact_ns: list[int] = []
-    exact_times: list[float] = []
-    for n in ns:
-        males = generate_imp_star_pedigree(n)
-        t_s = measure(
-            lambda: compute_at_least_one_match(
-                males, [LOCUS], mu=MU, n_samples=IMP_N_SAMPLES, seed=SEED
-            ),
-            repeats=REPEATS,
+    def build_imp(n, seed):
+        males = generate_pedigree(n, 30, EXTRA_BRANCHING, [LOCUS], seed=seed)
+        return lambda: compute_at_least_one_match(
+            males, [LOCUS], mu=MU, n_samples=IMP_N_SAMPLES, seed=SEED
         )
-        sampled_times.append(t_s)
-        line = f"  n={n:>3}  sampled={t_s:.1f}ms"
-        if n <= IMP_MAX_EXACT_N:
-            t_e = measure(
-                lambda: compute_at_least_one_match_exact(males, [LOCUS], mu=MU),
-                repeats=1,
-            )
-            exact_ns.append(n)
-            exact_times.append(t_e)
-            line += f"  exact={t_e:.1f}ms"
-        print(line)
-    return sampled_times, exact_ns, exact_times
+    return run_extra_series(ns, build_mc), run_extra_series(ns, build_imp)
+
+
+def overlay_u(us, n=200):
+    def build_mc(u, seed):
+        males = generate_mixed_pedigree(n, u, EXTRA_BRANCHING, [], [LOCUS], MC_COPIES, seed=seed)
+        return lambda: compute_match_probs_multicopy(
+            males, LOCUS, MC_COPIES, mu_all=MU, minall=MINALL, maxall=MAXALL
+        )
+    def build_imp(u, seed):
+        males = generate_pedigree(n, u, EXTRA_BRANCHING, [LOCUS], seed=seed)
+        return lambda: compute_at_least_one_match(
+            males, [LOCUS], mu=MU, n_samples=IMP_N_SAMPLES, seed=SEED
+        )
+    return run_extra_series(us, build_mc), run_extra_series(us, build_imp)
+
+
+def overlay_A(As, n=200, u=50):
+    centre = (MINALL + MAXALL) // 2
+    def build_mc(a_size, seed):
+        mn, mx = centre - a_size // 2, centre - a_size // 2 + a_size - 1
+        males = generate_mixed_pedigree(n, u, EXTRA_BRANCHING, [], [LOCUS], MC_COPIES,
+                                         suspect_allele=centre, seed=seed)
+        return lambda: compute_match_probs_multicopy(
+            males, LOCUS, MC_COPIES, mu_all=MU, minall=mn, maxall=mx
+        )
+    def build_imp(a_size, seed):
+        mn, mx = centre - a_size // 2, centre - a_size // 2 + a_size - 1
+        males = generate_pedigree(n, u, EXTRA_BRANCHING, [LOCUS], suspect_allele=centre, seed=seed)
+        return lambda: compute_at_least_one_match(
+            males, [LOCUS], mu=MU, n_samples=IMP_N_SAMPLES, minall=mn, maxall=mx, seed=SEED
+        )
+    return run_extra_series(As, build_mc), run_extra_series(As, build_imp)
+
+
+def overlay_L(Ls, n=50, u=25):
+    def build_mc(n_loci, seed):
+        loci  = [f"L{i}" for i in range(n_loci)]
+        males = generate_mixed_pedigree(n, u, EXTRA_BRANCHING, [], loci, MC_COPIES, seed=seed)
+        def call():
+            for loc in loci:
+                compute_match_probs_multicopy(males, loc, MC_COPIES, mu_all=MU,
+                                               minall=MINALL, maxall=MAXALL)
+        return call
+    def build_imp(n_loci, seed):
+        loci  = [f"L{i}" for i in range(n_loci)]
+        males = generate_pedigree(n, u, EXTRA_BRANCHING, loci, seed=seed)
+        return lambda: compute_at_least_one_match(
+            males, loci, mu=MU, n_samples=IMP_N_SAMPLES, seed=SEED
+        )
+    return run_extra_series(Ls, build_mc), run_extra_series(Ls, build_imp)
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +479,8 @@ def add_theory_line(ax, xs, results, theory_fn, label):
 def plot_panel(ax, xs, results, stds, xlabel, panel_label,
                fixed_params="", y_zero_bottom=True,
                theory_fn=None, theory_label="",
-               linear_fit=True, yscale="linear", xticks=None):
+               linear_fit=True,
+               mc_series=None, imp_series=None):
     """Render one panel of the figure.
 
     results/stds: dict[topology_name -> list[float]], mean and standard
@@ -480,14 +494,10 @@ def plot_panel(ax, xs, results, stds, xlabel, panel_label,
     theory_label:
         Legend label for the reference curve (e.g. "theory: O(n)").
     linear_fit:
-        Whether to overlay a per-topology dashed least-squares line fit
-        (appropriate for the linear-scaling panels; disabled for the
-        multi-copy panel, whose scaling is exponential in c).
-    yscale:
-        "linear" (default) or "log" for the y-axis.
-    xticks:
-        Optional explicit tick positions (used for the small integer
-        range of copy counts in the multi-copy panel).
+        Whether to overlay a per-topology dashed least-squares line fit.
+    mc_series, imp_series:
+        Optional (means, stds) tuples for the multi-copy / at-least-one-
+        match overlay series, plotted along the same xs.
     """
     for name in TOPOLOGIES:
         ys  = results[name]
@@ -506,22 +516,28 @@ def plot_panel(ax, xs, results, stds, xlabel, panel_label,
     if theory_fn is not None:
         add_theory_line(ax, xs, results, theory_fn, theory_label)
 
+    if mc_series is not None:
+        means, stds_mc = mc_series
+        ax.errorbar(xs, means, yerr=stds_mc, marker="D", color=MC_COLOR,
+                     linewidth=1.5, markersize=5, capsize=3, elinewidth=0.8,
+                     linestyle="-.", label=f"multi-copy ($c={MC_COPIES}$)")
+
+    if imp_series is not None:
+        means, stds_imp = imp_series
+        ax.errorbar(xs, means, yerr=stds_imp, marker="v", color=IMP_COLOR,
+                     linewidth=1.5, markersize=5, capsize=3, elinewidth=0.8,
+                     linestyle=":",
+                     label=f"at least one match ($n_{{samples}}$={IMP_N_SAMPLES:,})")
+
     ax.set_xlabel(xlabel, fontsize=10)
     ax.set_ylabel("Runtime (ms)", fontsize=10)
-    if yscale == "log":
-        ax.set_yscale("log")
+    ax.set_xlim(left=0)
+    if y_zero_bottom:
+        ax.set_ylim(bottom=0)
     else:
-        ax.set_xlim(left=0)
-        if y_zero_bottom:
-            ax.set_ylim(bottom=0)
-        else:
-            ax.margins(y=0.15)
-    if xticks is not None:
-        ax.set_xticks(xticks)
-    else:
-        ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
-    if yscale != "log":
-        ax.yaxis.set_minor_locator(ticker.AutoMinorLocator())
+        ax.margins(y=0.15)
+    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
+    ax.yaxis.set_minor_locator(ticker.AutoMinorLocator())
     ax.tick_params(labelsize=9)
 
     # Panel label (a, b, c, d), placed outside the axes to the upper-left
@@ -535,34 +551,10 @@ def plot_panel(ax, xs, results, stds, xlabel, panel_label,
                 fontsize=8, color="black", va="bottom", ha="right")
 
 
-def plot_imp_panel(ax, ns_sampled, sampled_times, ns_exact, exact_times, panel_label):
-    """Panel f: i-MP runtime vs. number of untyped candidates n.
-
-    Sampling cost is independent of n; exact inclusion-exclusion costs
-    O(2^n) and is only shown up to the last tractable n.
-    """
-    ax.plot(ns_sampled, sampled_times, "o-", color="#542788", linewidth=1.5,
-             markersize=5, label=f"sampling ($n_{{samples}}$={IMP_N_SAMPLES:,})")
-    ax.plot(ns_exact, exact_times, "s--", color="#b2182b", linewidth=1.5,
-             markersize=5, label="exact (inclusion-exclusion)")
-
-    ax.set_xlabel("Number of untyped candidates  $n_{cand}$", fontsize=10)
-    ax.set_ylabel("Runtime (ms)", fontsize=10)
-    ax.set_yscale("log")
-    ax.set_xlim(left=0)
-    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
-    ax.tick_params(labelsize=9)
-    ax.legend(fontsize=8, frameon=False, loc="center left")
-
-    ax.text(-0.24, 1.0, panel_label, transform=ax.transAxes,
-            fontsize=11, fontweight="bold", va="top", ha="right")
-    ax.text(0.97, 0.05, "single locus,  $n_{all} = 28$", transform=ax.transAxes,
-            fontsize=8, color="black", va="bottom", ha="right")
-
-
-def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A,
-                Ls, res_L, std_L, ks, res_c, std_c,
-                ns_imp, sampled_imp, ns_exact_imp, exact_imp):
+def make_figure(ns, res_n, std_n, mc_n, imp_n,
+                us, res_u, std_u, mc_u, imp_u,
+                As, res_A, std_A, mc_A, imp_A,
+                Ls, res_L, std_L, mc_L, imp_L):
     plt.rcParams.update({
         "font.family":      "serif",
         "font.size":        10,
@@ -573,15 +565,16 @@ def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A,
         "ytick.right":      True,
     })
 
-    fig, axes = plt.subplots(2, 3, figsize=(11.5, 7.0))
-    fig.subplots_adjust(hspace=0.38, wspace=0.5, top=0.95, bottom=0.12)
+    fig, axes = plt.subplots(2, 2, figsize=(9.0, 7.0))
+    fig.subplots_adjust(hspace=0.4, wspace=0.42, top=0.95, bottom=0.16)
 
     plot_panel(axes[0, 0], ns, res_n, std_n,
                xlabel="Pedigree size  $n_{tot}$",
                panel_label="a",
                fixed_params="$n_{unt} = 30$,  $n_{all} = 28$,  $n_{loc} = 1$",
                theory_fn=lambda x: x,
-               theory_label="theory: $O(n)$")
+               theory_label="theory: $O(n)$",
+               mc_series=mc_n, imp_series=imp_n)
 
     plot_panel(axes[0, 1], us, res_u, std_u,
                xlabel="Number of untyped males  $n_{unt}$",
@@ -589,41 +582,32 @@ def make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A,
                fixed_params="$n_{tot} = 200$,  $n_{all} = 28$,  $n_{loc} = 1$",
                y_zero_bottom=False,
                theory_fn=lambda x: 1.0,
-               theory_label="theory: $O(1)$")
+               theory_label="theory: $O(1)$",
+               mc_series=mc_u, imp_series=imp_u)
 
-    plot_panel(axes[0, 2], As, res_A, std_A,
+    plot_panel(axes[1, 0], As, res_A, std_A,
                xlabel="Number of alleles  $n_{all}$",
                panel_label="c",
                fixed_params="$n_{tot} = 200$,  $n_{unt} = 50$,  $n_{loc} = 1$",
                theory_fn=lambda x: x,
-               theory_label="theory: $O(A)$")
+               theory_label="theory: $O(A)$",
+               mc_series=mc_A, imp_series=imp_A)
 
-    plot_panel(axes[1, 0], Ls, res_L, std_L,
+    plot_panel(axes[1, 1], Ls, res_L, std_L,
                xlabel="Number of loci  $n_{loc}$",
                panel_label="d",
                fixed_params="$n_{tot} = 50$,  $n_{unt} = 25$,  $n_{all} = 28$",
                theory_fn=lambda x: x,
-               theory_label="theory: $O(L)$")
+               theory_label="theory: $O(L)$",
+               mc_series=mc_L, imp_series=imp_L)
 
-    plot_panel(axes[1, 1], ks, res_c, std_c,
-               xlabel="Number of multi-copy loci  (of 30)",
-               panel_label="e",
-               fixed_params=(f"$n_{{tot}} = 50$,  $n_{{unt}} = 25$,  "
-                              f"$A = {A_MC}$,  $c = 2$ per locus"),
-               y_zero_bottom=False)
-
-    plot_imp_panel(axes[1, 2], ns_imp, sampled_imp, ns_exact_imp, exact_imp,
-                   panel_label="f")
-
-    # Shared legend: topology series + one theory entry (from panel a);
-    # panel e has no global theory line (its baseline cost, from the
-    # remaining single-copy loci, does not pass through the origin); panel f
-    # has its own local legend (sampling vs. exact), not part of this one
+    # Shared legend: topology series + one theory entry + the two overlay
+    # series (all present on panel a)
     handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels,
                loc="lower center",
-               bbox_to_anchor=(0.5, 0.01),
-               ncol=4,
+               bbox_to_anchor=(0.5, 0.0),
+               ncol=3,
                fontsize=9,
                frameon=False)
 
@@ -647,16 +631,19 @@ if __name__ == "__main__":
     us = [1, 2, 5, 10, 20, 30, 50, 75, 100, 125, 150, 175, 199]
     As = [4, 6, 8, 10, 14, 18, 22, 26, 28]
     Ls = [1, 2, 3, 5, 8, 10, 15, 20]
-    ks = [0, 5, 10, 15, 20, 25, 30]
-    ns_imp = [2, 4, 6, 8, 10, 12, 14, 18, 22, 26, 30]
 
     res_n, std_n = experiment_n(ns)
     res_u, std_u = experiment_u(us)
     res_A, std_A = experiment_A(As)
     res_L, std_L = experiment_L(Ls)
-    res_c, std_c = experiment_mc_count(ks)
-    sampled_imp, ns_exact_imp, exact_imp = experiment_imp_candidates(ns_imp)
 
-    make_figure(ns, res_n, std_n, us, res_u, std_u, As, res_A, std_A,
-                Ls, res_L, std_L, ks, res_c, std_c,
-                ns_imp, sampled_imp, ns_exact_imp, exact_imp)
+    print("Overlay series: multi-copy and at-least-one-match, per panel")
+    mc_n, imp_n = overlay_n(ns)
+    mc_u, imp_u = overlay_u(us)
+    mc_A, imp_A = overlay_A(As)
+    mc_L, imp_L = overlay_L(Ls)
+
+    make_figure(ns, res_n, std_n, mc_n, imp_n,
+                us, res_u, std_u, mc_u, imp_u,
+                As, res_A, std_A, mc_A, imp_A,
+                Ls, res_L, std_L, mc_L, imp_L)
