@@ -215,19 +215,14 @@ def generate_mixed_pedigree(
 # ---------------------------------------------------------------------------
 
 def measure(fn, *args, repeats: int = REPEATS) -> float:
-    """Return median CPU time in milliseconds over *repeats* calls.
-
-    Uses time.process_time() (CPU time consumed by this process) rather
-    than perf_counter() (wall-clock time), so measurements are immune to
-    scheduling jitter from other processes on a shared/virtualized host.
-    """
+    """Return median runtime in milliseconds over *repeats* calls."""
     # Warm-up: one call to populate caches before actual measurement
     fn(*args)
     times = []
     for _ in range(repeats):
-        t0 = time.process_time()
+        t0 = time.perf_counter()
         fn(*args)
-        times.append(time.process_time() - t0)
+        times.append(time.perf_counter() - t0)
     return float(np.median(times)) * 1000.0
 
 
