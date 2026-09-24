@@ -75,7 +75,7 @@ N_SEEDS = 20            # number of random untyped-placements per data point
 LOCUS   = "L"          # generic locus name
 SEED    = 22112000     # base seed; placement k uses SEED + k
 
-N_SEEDS_EXTRA = 5              # fewer seeds for the multi-copy overlay series
+N_SEEDS_EXTRA = 15             # seeds for the multi-copy overlay series
 SUSPECT_MC    = 16             # allele carried by the suspect in multicopy experiments
 A_MC          = MAXALL - MINALL + 1  # full allele range (no window narrowing)
 MC_COPIES     = 2              # copy count used for the multi-copy overlay series
@@ -215,14 +215,19 @@ def generate_mixed_pedigree(
 # ---------------------------------------------------------------------------
 
 def measure(fn, *args, repeats: int = REPEATS) -> float:
-    """Return median runtime in milliseconds over *repeats* calls."""
+    """Return median CPU time in milliseconds over *repeats* calls.
+
+    Uses time.process_time() (CPU time consumed by this process) rather
+    than perf_counter() (wall-clock time), so measurements are immune to
+    scheduling jitter from other processes on a shared/virtualized host.
+    """
     # Warm-up: one call to populate caches before actual measurement
     fn(*args)
     times = []
     for _ in range(repeats):
-        t0 = time.perf_counter()
+        t0 = time.process_time()
         fn(*args)
-        times.append(time.perf_counter() - t0)
+        times.append(time.process_time() - t0)
     return float(np.median(times)) * 1000.0
 
 
@@ -458,32 +463,8 @@ def add_linear_fit(ax, xs, ys, color):
             "--", color=color, linewidth=1.2, alpha=0.6)
 
 
-def add_theory_line(ax, xs, results, theory_fn, label):
-    """Overlay a single scaled theoretical reference curve.
-
-    Fits one global scale factor k (least-squares, intercept=0) across
-    all topologies simultaneously, then draws k · theory_fn(x) as a
-    solid gray background line.
-    """
-    xs_arr = np.array(xs, dtype=float)
-    theo   = np.array([theory_fn(x) for x in xs_arr])
-
-    y_all = np.concatenate([np.array(results[name]) for name in TOPOLOGIES])
-    t_all = np.tile(theo, len(TOPOLOGIES))
-
-    denom = float(np.dot(t_all, t_all))
-    k     = float(np.dot(t_all, y_all)) / denom if denom > 0 else 1.0
-
-    x_fit = np.linspace(0, max(xs) * 1.05, 300)
-    y_fit = k * np.array([theory_fn(x) for x in x_fit])
-
-    ax.plot(x_fit, y_fit, "-", color="#aaaaaa", linewidth=2.5,
-            alpha=0.45, zorder=0, label=label)
-
-
 def plot_panel(ax, xs, results, stds, xlabel, panel_label,
                fixed_params="", y_zero_bottom=True,
-               theory_fn=None, theory_label="",
                linear_fit=True,
                mc_series=None):
     """Render one panel of the figure.
@@ -492,12 +473,6 @@ def plot_panel(ax, xs, results, stds, xlabel, panel_label,
     deviation of runtime across the N_SEEDS random untyped-placements
     drawn per data point.
 
-    theory_fn:
-        Optional callable x -> float giving the *shape* of the expected
-        scaling (e.g. ``lambda x: x`` for O(x)).  A single scale factor
-        is fitted to the data and a gray reference curve is overlaid.
-    theory_label:
-        Legend label for the reference curve (e.g. "theory: O(n)").
     linear_fit:
         Whether to overlay a per-topology dashed least-squares line fit.
     mc_series:
@@ -517,9 +492,6 @@ def plot_panel(ax, xs, results, stds, xlabel, panel_label,
                      label=name)
         if linear_fit:
             add_linear_fit(ax, xs, ys, COLORS[name])
-
-    if theory_fn is not None:
-        add_theory_line(ax, xs, results, theory_fn, theory_label)
 
     if mc_series is not None:
         means, stds_mc = mc_series
@@ -595,8 +567,6 @@ def make_figure(ns, res_n, std_n, mc_n,
                xlabel="Pedigree size  $n_{tot}$",
                panel_label="a",
                fixed_params="$n_{unt} = 30$,  $n_{all} = 28$,  $n_{loc} = 1$",
-               theory_fn=lambda x: x,
-               theory_label="theory: $O(n)$",
                mc_series=mc_n)
 
     plot_panel(axes[0, 1], us, res_u, std_u,
@@ -604,24 +574,18 @@ def make_figure(ns, res_n, std_n, mc_n,
                panel_label="b",
                fixed_params="$n_{tot} = 200$,  $n_{all} = 28$,  $n_{loc} = 1$",
                y_zero_bottom=False,
-               theory_fn=lambda x: 1.0,
-               theory_label="theory: $O(1)$",
                mc_series=mc_u)
 
     plot_panel(axes[0, 2], As, res_A, std_A,
                xlabel="Number of alleles  $n_{all}$",
                panel_label="c",
                fixed_params="$n_{tot} = 200$,  $n_{unt} = 50$,  $n_{loc} = 1$",
-               theory_fn=lambda x: x,
-               theory_label="theory: $O(A)$",
                mc_series=mc_A)
 
     plot_panel(axes[1, 0], Ls, res_L, std_L,
                xlabel="Number of loci  $n_{loc}$",
                panel_label="d",
                fixed_params="$n_{tot} = 50$,  $n_{unt} = 25$,  $n_{all} = 28$",
-               theory_fn=lambda x: x,
-               theory_label="theory: $O(L)$",
                mc_series=mc_L)
 
     plot_imp_panel(axes[1, 1], us_imp, means_imp, stds_imp, panel_label="e")
@@ -629,19 +593,20 @@ def make_figure(ns, res_n, std_n, mc_n,
     # Unused 6th slot in the 2x3 grid
     axes[1, 2].axis("off")
 
-    # Shared legend: topology series + one theory entry + the multi-copy
-    # overlay (from panel a) plus the at-least-one-match series (from
-    # panel e). Handles are explicitly ordered (matplotlib fills a
-    # legend column-major) so "at least one match" lands directly below
-    # "multi-copy" in the same column.
+    # Shared legend: topology series + the multi-copy overlay (from panel
+    # a) plus the at-least-one-match series (from panel e). Handles are
+    # explicitly ordered (matplotlib fills a legend column-major) so
+    # "at least one match" lands directly below "multi-copy" in the
+    # same column (5 entries, ncol=2 -> column 0 gets 3, column 1 gets
+    # the last 2).
     handles_a, labels_a = axes[0, 0].get_legend_handles_labels()
     handles_e, labels_e = axes[1, 1].get_legend_handles_labels()
     handle_map = dict(zip(labels_a, handles_a))
     handle_map.update(dict(zip(labels_e, handles_e)))
 
     order = [
-        "theory: $O(n)$", "Linear chain (1 son)", "Wide (3 sons)",
-        "Very wide (5 sons)", f"multi-copy ($c={MC_COPIES}$)",
+        "Linear chain (1 son)", "Wide (3 sons)", "Very wide (5 sons)",
+        f"multi-copy ($c={MC_COPIES}$)",
         f"at least one match ($n_{{samples}}$={IMP_N_SAMPLES:,})",
     ]
     ordered_labels  = [l for l in order if l in handle_map]
@@ -649,7 +614,7 @@ def make_figure(ns, res_n, std_n, mc_n,
     fig.legend(ordered_handles, ordered_labels,
                loc="lower center",
                bbox_to_anchor=(0.5, 0.0),
-               ncol=3,
+               ncol=2,
                fontsize=9,
                frameon=False)
 
