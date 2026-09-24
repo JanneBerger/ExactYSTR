@@ -552,18 +552,19 @@ def plot_panel(ax, xs, results, stds, xlabel, panel_label,
 def plot_imp_panel(ax, xs, means, stds, panel_label):
     """Panel e: at-least-one-match runtime vs. number of untyped
     candidates, on its own scale with the analysis' real n_samples."""
-    ax.errorbar(xs, means, yerr=stds, marker="v", color=IMP_COLOR,
+    means_s = [m / 1000.0 for m in means]
+    stds_s  = [s / 1000.0 for s in stds]
+    ax.errorbar(xs, means_s, yerr=stds_s, marker="v", color=IMP_COLOR,
                  linewidth=1.5, markersize=5, capsize=3, elinewidth=0.8,
                  linestyle=":", label=f"at least one match ($n_{{samples}}$={IMP_N_SAMPLES:,})")
 
     ax.set_xlabel("Number of untyped candidates  $n_{unt}$", fontsize=10)
-    ax.set_ylabel("Runtime (ms)", fontsize=10)
+    ax.set_ylabel("Runtime (s)", fontsize=10)
     ax.set_xlim(left=0)
     ax.margins(y=0.15)
     ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
     ax.yaxis.set_minor_locator(ticker.AutoMinorLocator())
     ax.tick_params(labelsize=9)
-    ax.legend(fontsize=8, frameon=False, loc="upper left")
 
     ax.text(-0.24, 1.0, panel_label, transform=ax.transAxes,
             fontsize=11, fontweight="bold", va="top", ha="right")
@@ -629,9 +630,23 @@ def make_figure(ns, res_n, std_n, mc_n,
     axes[1, 2].axis("off")
 
     # Shared legend: topology series + one theory entry + the multi-copy
-    # overlay (all present on panel a); panel e has its own local legend
-    handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels,
+    # overlay (from panel a) plus the at-least-one-match series (from
+    # panel e). Handles are explicitly ordered (matplotlib fills a
+    # legend column-major) so "at least one match" lands directly below
+    # "multi-copy" in the same column.
+    handles_a, labels_a = axes[0, 0].get_legend_handles_labels()
+    handles_e, labels_e = axes[1, 1].get_legend_handles_labels()
+    handle_map = dict(zip(labels_a, handles_a))
+    handle_map.update(dict(zip(labels_e, handles_e)))
+
+    order = [
+        "theory: $O(n)$", "Linear chain (1 son)", "Wide (3 sons)",
+        "Very wide (5 sons)", f"multi-copy ($c={MC_COPIES}$)",
+        f"at least one match ($n_{{samples}}$={IMP_N_SAMPLES:,})",
+    ]
+    ordered_labels  = [l for l in order if l in handle_map]
+    ordered_handles = [handle_map[l] for l in ordered_labels]
+    fig.legend(ordered_handles, ordered_labels,
                loc="lower center",
                bbox_to_anchor=(0.5, 0.0),
                ncol=3,
