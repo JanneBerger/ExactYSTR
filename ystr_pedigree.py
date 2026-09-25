@@ -50,18 +50,13 @@ which inherits the symmetry and reversibility of T.  Messages are
 computed by sequential contraction over copy axes at cost O(c * A^c)
 rather than the naive O(A^{2c}).
 
-The overall (all-copy) mutation rate mu_all of the locus, as usually
-reported for multi-copy markers, is converted to the per-copy rate
-
-    mu = 1 - (1 - mu_all)^(1/c)
-
-before being used in the kernel.  With two-step mutations, the conversion
-is applied to the total rate mu_all = mu1_all + mu2_all, and the per-copy
-rate is split in the same one-/two-step proportion.  Every public entry
-point (compute_match_probs_fast, compute_match_probs_multicopy,
-compute_at_least_one_match and the CLI's --mu) takes this overall
-per-locus rate; for single-copy loci (c=1) it is simply the per-meiosis
-rate.
+All mutation rates (mu, mu2) are per-copy rates per meiosis and enter
+the per-copy kernel T unchanged; no conversion is applied.  This holds
+for every public entry point (compute_match_probs_fast,
+compute_match_probs_multicopy, compute_at_least_one_match and the CLI's
+--mu); for single-copy loci (c=1) it is simply the per-meiosis rate.
+For reference, the corresponding all-copy rate of a c-copy locus is
+mu_all = 1 - (1 - mu)^c.
 
 CSV format for multi-copy alleles
 ----------------------------------
@@ -347,8 +342,8 @@ def _multicopy_inside_pass(
     males:         list[Male],
     locus:         str,
     n_copies:      int,
-    mu_all:        float = DEFAULT_MU,
-    mu2_all:       float = DEFAULT_MU2,
+    mu:            float = DEFAULT_MU,
+    mu2:           float = DEFAULT_MU2,
     minall:        int   = MINALL,
     maxall:        int   = MAXALL,
 ) -> _MulticopyInside | None:
@@ -367,17 +362,7 @@ def _multicopy_inside_pass(
     """
     c = n_copies
 
-    # Per-copy mutation rates (equation 3 of the technical note): the
-    # overall per-locus rate mu_all + mu2_all is converted to a per-copy
-    # rate, which is then split in the same one-/two-step proportion, so
-    # the two-step fraction is preserved exactly on every copy.
-    mu_tot_all = mu_all + mu2_all
-    mu_tot = 1.0 - (1.0 - mu_tot_all) ** (1.0 / c)
-    if mu_tot_all > 0.0:
-        mu  = mu_tot * mu_all  / mu_tot_all
-        mu2 = mu_tot * mu2_all / mu_tot_all
-    else:
-        mu = mu2 = 0.0
+    # mu, mu2 are per-copy rates and are used in the kernel unchanged.
 
     # Normalise allele values
     base: list[tuple[int, ...] | None] = [
@@ -450,8 +435,8 @@ def compute_match_probs_multicopy(
     males:         list[Male],
     locus:         str,
     n_copies:      int,
-    mu_all:        float = DEFAULT_MU,
-    mu2_all:       float = DEFAULT_MU2,
+    mu:            float = DEFAULT_MU,
+    mu2:           float = DEFAULT_MU2,
     minall:        int   = MINALL,
     maxall:        int   = MAXALL,
 ) -> tuple[dict[int, float], float]:
@@ -476,14 +461,10 @@ def compute_match_probs_multicopy(
         or 0 for untyped.
     n_copies : int
         Number of chromosomal copies *c*.
-    mu_all : float
-        All-copy one-step mutation rate per meiosis, as reported for
-        the locus as a whole.
-    mu2_all : float
-        All-copy two-step mutation rate per meiosis (default 0).  The
-        total ``mu_all + mu2_all`` is converted internally to the
-        per-copy rate ``1 - (1 - (mu_all + mu2_all))**(1/c)``, which is
-        split in the same one-/two-step proportion.
+    mu : float
+        Per-copy one-step mutation rate per meiosis.
+    mu2 : float
+        Per-copy two-step mutation rate per meiosis (default 0).
     minall, maxall : int
         Global allele bounds. The full range is used (no window
         narrowing around observed alleles), so the state space is
@@ -501,7 +482,7 @@ def compute_match_probs_multicopy(
         males.
     """
     ctx = _multicopy_inside_pass(
-        males, locus, n_copies, mu_all, mu2_all, minall, maxall
+        males, locus, n_copies, mu, mu2, minall, maxall
     )
     if ctx is None:
         return {}, 0.0
@@ -604,10 +585,10 @@ def compute_match_probs_fast(
         Locus name.
     mu:
         One-step mutation rate per meiosis (default: DEFAULT_MU).
-        For multi-copy loci this is interpreted as the all-copy rate.
+        For multi-copy loci this is the per-copy rate.
     mu2:
         Two-step mutation rate per meiosis (default: 0).
-        For multi-copy loci also interpreted as the all-copy rate.
+        For multi-copy loci also the per-copy rate.
     minall, maxall:
         Inclusive allele range (default: MINALL, MAXALL).
 
@@ -624,7 +605,7 @@ def compute_match_probs_fast(
     n_copies = _infer_copies(males, locus)
     if n_copies > 1:
         return compute_match_probs_multicopy(
-            males, locus, n_copies, mu_all=mu, mu2_all=mu2, minall=minall, maxall=maxall
+            males, locus, n_copies, mu=mu, mu2=mu2, minall=minall, maxall=maxall
         )
 
     base    = [m.alleles.get(locus, 0) for m in males]
@@ -817,8 +798,8 @@ def _sample_conditional(
 def sample_locus_matches(
     males:         list[Male],
     locus:         str,
-    mu_all:        float = DEFAULT_MU,
-    mu2_all:       float = DEFAULT_MU2,
+    mu:            float = DEFAULT_MU,
+    mu2:           float = DEFAULT_MU2,
     n_copies:      int | None = None,
     minall:        int   = MINALL,
     maxall:        int   = MAXALL,
@@ -872,7 +853,7 @@ def sample_locus_matches(
 
     n = len(males)
     ctx = _multicopy_inside_pass(
-        males, locus, n_copies, mu_all, mu2_all, minall, maxall
+        males, locus, n_copies, mu, mu2, minall, maxall
     )
     if ctx is None:
         return np.zeros((n_samples, n), dtype=bool), np.zeros(n, dtype=bool), False
@@ -1019,10 +1000,8 @@ def compute_at_least_one_match(
         Loci to combine; a locus is skipped (and omitted from
         ``loci_used``) if the suspect is untyped there.
     mu : float
-        Overall per-locus mutation rate (matching the CLI's ``--mu``).
-        For multi-copy loci this is the all-copy rate ``mu_all``; the
-        per-copy rate ``1 - (1 - mu_all)**(1/c)`` is derived
-        automatically for each locus from its copy count.
+        Mutation rate per meiosis (matching the CLI's ``--mu``); for
+        multi-copy loci this is the per-copy rate.
     two_step_frac : float
         Fraction of each locus's mutations that are two-step
         (``mu1 = (1 - f) * mu``, ``mu2 = f * mu``).
@@ -1050,7 +1029,7 @@ def compute_at_least_one_match(
         lmu2 = mu * two_step_frac
 
         matches, excl, usable = sample_locus_matches(
-            males, locus, mu_all=lmu1, mu2_all=lmu2, n_copies=c,
+            males, locus, mu=lmu1, mu2=lmu2, n_copies=c,
             minall=minall, maxall=maxall,
             n_samples=n_samples, rng=rng,
         )

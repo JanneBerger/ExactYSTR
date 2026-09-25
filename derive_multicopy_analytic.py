@@ -31,9 +31,8 @@ own genotype; C02_mc's typed son carries a homozygous genotype --
 unambiguous (unlike a heterozygous son, whose own copy-to-allele
 mapping is itself unknown and would have to be marginalized over), and
 reachable from the suspect's alleles by exactly one one-step mutation
-per copy. mu (the code's all-copy rate) is chosen so that the per-copy,
-unidirectional mutation rate equals z=0.05, matching Table 2
-(mu_all = 1-(1-2z)^2). The symbolic derivation below uses its own
+per copy. mu (the code's per-copy rate) is 2z = 0.1, so that the
+per-copy, unidirectional mutation rate equals z=0.05, matching Table 2. The symbolic derivation below uses its own
 representative allele values (13,14 / 14,14 / 13,13); by the model's
 translation invariance, the resulting formulas apply unchanged to the
 different allele values actually used in the CSV files.
@@ -170,7 +169,7 @@ CASES = [
      "C-mutant: suspect -> typed(14,14) -> untyped"),
 ]
 
-MU_ALL = 1.0 - (1.0 - 2 * 0.05) ** 2   # 0.19; per-copy unidirectional z=0.05
+MU = 2 * 0.05   # per-copy rate 0.1; per-copy unidirectional z=0.05
 
 
 def main():
@@ -185,7 +184,7 @@ def main():
         males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, fname))
         id_to_idx = {m.male_id: i for i, m in enumerate(males)}
         mp, _ = compute_match_probs_multicopy(
-            males, loci[0], n_copies=2, mu_all=MU_ALL,
+            males, loci[0], n_copies=2, mu=MU,
         )
         es_value = mp[id_to_idx[male_id]]
 

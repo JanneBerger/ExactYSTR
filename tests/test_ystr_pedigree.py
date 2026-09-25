@@ -138,7 +138,7 @@ def test_multicopy_no_mutation_matching_leaf_mp_is_one():
     # Suspect {10,11} -> untyped -> untyped -> typed {10,11}.
     # mu=0 ⟹ no change possible ⟹ untyped males must carry {10,11} ⟹ MP=1.
     males = _make_mc_chain((10, 11), (10, 11))
-    mp, avg = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=0.0)
+    mp, avg = compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.0)
 
     assert mp.keys() == {1, 2}
     assert mp[1] == pytest.approx(1.0)
@@ -150,7 +150,7 @@ def test_multicopy_no_mutation_mismatched_leaf_returns_empty():
     # Suspect {10,11} -> ... -> typed {10,12}.
     # mu=0 ⟹ impossible path ⟹ P1=0 ⟹ empty result.
     males = _make_mc_chain((10, 11), (10, 12))
-    mp, avg = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=0.0)
+    mp, avg = compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.0)
 
     assert mp == {}
     assert avg == 0.0
@@ -161,7 +161,7 @@ def test_multicopy_untyped_suspect_returns_empty():
         Male(male_id=1, generation=0, father_id=-1, alleles={"L": 0}),
         Male(male_id=2, generation=1, father_id=1,  alleles={"L": (10, 11)}),
     ]
-    mp, avg = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=0.1)
+    mp, avg = compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.1)
     assert mp == {}
     assert avg == 0.0
 
@@ -171,7 +171,7 @@ def test_multicopy_no_untyped_males_returns_empty():
         Male(male_id=1, generation=0, father_id=-1, alleles={"L": (10, 11)}),
         Male(male_id=2, generation=1, father_id=1,  alleles={"L": (10, 11)}),
     ]
-    mp, avg = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=0.1)
+    mp, avg = compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.1)
     assert mp == {}
     assert avg == 0.0
 
@@ -182,7 +182,7 @@ def test_multicopy_dispatch_via_fast():
     males = _make_mc_chain((10, 11), (10, 11))
     mp_fast, avg_fast = compute_match_probs_fast(males, "L", mu=0.0)
     mp_mc,   avg_mc   = compute_match_probs_multicopy(
-        males, "L", n_copies=2, mu_all=0.0)
+        males, "L", n_copies=2, mu=0.0)
 
     assert mp_fast.keys() == mp_mc.keys()
     for k in mp_fast:
@@ -206,16 +206,14 @@ def test_multicopy_crossing_term_vs_shortcut():
     # the crossing term.  Here we verify the exact engine returns > 0.81.
     #
     # With per-copy mu=0.1: T(11->11)=T(12->12)=0.9, T(11->12)=T(12->11)=0.05
-    # mu_all for a 2-copy marker with per-copy mu=0.1: mu_all = 1-(1-0.1)^2 = 0.19
     #
     # P(son={11,12} | father ordered (11,12)) = 0.9*0.9 + 0.05*0.05 = 0.8125
     # Averaging over both orderings of father's state: MP = 0.8125
-    mu_all = 1.0 - (1.0 - 0.1) ** 2   # 0.19 → per-copy mu = 0.1
     males = [
         Male(male_id=1, generation=0, father_id=-1, alleles={"L": (11, 12)}),
         Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
     ]
-    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=mu_all)
+    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.1)
 
     # Must exceed the shortcut value of 0.8100 and equal the exact value 0.8125
     assert mp[1] > 0.810
@@ -228,7 +226,7 @@ def test_multicopy_homozygous_suspect():
         Male(male_id=1, generation=0, father_id=-1, alleles={"L": (11, 11)}),
         Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
     ]
-    mp, avg = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=0.0)
+    mp, avg = compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.0)
     assert mp[1] == pytest.approx(1.0)
 
 
@@ -238,7 +236,7 @@ def test_multicopy_requires_sorted_pedigree():
         Male(male_id=2, generation=1, father_id=-1, alleles={"L": 0}),
     ]
     with pytest.raises(ValueError):
-        compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=0.1)
+        compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.1)
 
 
 def test_multicopy_symmetric_siblings():
@@ -249,21 +247,19 @@ def test_multicopy_symmetric_siblings():
         Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
         Male(male_id=3, generation=1, father_id=1,  alleles={"L": 0}),
     ]
-    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=0.1)
+    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.1)
     assert mp[1] == pytest.approx(mp[2], rel=1e-9)
 
 
-def test_multicopy_per_copy_rate_conversion():
-    # For a 2-copy marker with mu_all=0.19 (= 1 - 0.9^2):
-    #   per-copy mu = 1 - sqrt(1 - 0.19) = 1 - 0.9 = 0.1
+def test_multicopy_mu_is_per_copy_rate():
+    # mu is the per-copy rate and is used unchanged for every copy.
     # For a homozygous suspect {12,12} → untyped son:
     #   MP = P(both copies stay at 12) = T(12->12)^2 = (1-0.1)^2 = 0.81
-    mu_all = 1.0 - (1.0 - 0.1) ** 2   # = 0.19
     males = [
         Male(male_id=1, generation=0, father_id=-1, alleles={"L": (12, 12)}),
         Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
     ]
-    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=mu_all)
+    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.1)
 
     # Each copy must stay at 12: (1-mu_per_copy)^2 = 0.9^2 = 0.81
     assert mp[1] == pytest.approx(0.81, abs=1e-6)
@@ -275,10 +271,9 @@ def test_multicopy_per_copy_rate_conversion():
 #
 # A01_mc2/B01_mc/C01_mc/C02_mc use a heterozygous suspect with adjacent
 # alleles (10,11 or 13,14), mirroring the single-copy A-C examples
-# (Figure 1 / Table 2); A01_mc1 uses a homozygous suspect instead. mu
-# (the code's all-copy rate) is chosen so that the per-copy,
-# unidirectional mutation rate equals z=0.05 (i.e. mu_all =
-# 1-(1-2z)^2 = 0.19), matching the z=0.05 used throughout Table 2.
+# (Figure 1 / Table 2); A01_mc1 uses a homozygous suspect instead. The
+# per-copy rate mu = 2z = 0.1 gives a per-copy, unidirectional mutation
+# rate of z=0.05, matching the z=0.05 used throughout Table 2.
 #
 # C01_mc's typed son carries the suspect's own genotype (13,14); C02_mc's
 # typed son carries the homozygous genotype (14,14) -- unambiguous
@@ -287,7 +282,7 @@ def test_multicopy_per_copy_rate_conversion():
 # the suspect's alleles by exactly one one-step mutation per copy.
 # ---------------------------------------------------------------------------
 
-MC_MU_ALL = 1.0 - (1.0 - 2 * 0.05) ** 2   # 0.19; per-copy unidirectional z=0.05
+MC_MU = 2 * 0.05   # per-copy rate 0.1; per-copy unidirectional z=0.05
 
 
 @pytest.mark.parametrize("fname,male_id,expected", [
@@ -305,7 +300,7 @@ def test_multicopy_AC_analogues_match_analytic_formula(fname, male_id, expected)
     males, loci = load_pedigree_from_csv(os.path.join(PEDIGREE_DIR, fname))
     id_to_idx = {m.male_id: i for i, m in enumerate(males)}
     mp, _ = compute_match_probs_multicopy(
-        males, loci[0], n_copies=2, mu_all=MC_MU_ALL,
+        males, loci[0], n_copies=2, mu=MC_MU,
     )
     assert mp[id_to_idx[male_id]] == pytest.approx(expected, abs=1e-6)
 
@@ -323,7 +318,7 @@ def test_sample_locus_matches_matches_analytic_single_copy():
 
     rng = np.random.default_rng(0)
     matches, excluded, usable = sample_locus_matches(
-        males, "M1", mu_all=0.1, n_samples=100_000, rng=rng
+        males, "M1", mu=0.1, n_samples=100_000, rng=rng
     )
     assert usable
     assert not excluded.any()
@@ -334,16 +329,15 @@ def test_sample_locus_matches_matches_analytic_single_copy():
 def test_sample_locus_matches_multicopy_matches_analytic():
     # Section 2.3 crossing-term example: father (11,12), mu_pc=0.1 -> exact
     # MP = 0.8125.  The sampled rate must converge to the same value.
-    mu_all = 1.0 - (1.0 - 0.1) ** 2
     males = [
         Male(male_id=1, generation=0, father_id=-1, alleles={"L": (11, 12)}),
         Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
     ]
-    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=mu_all)
+    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.1)
 
     rng = np.random.default_rng(1)
     matches, excluded, usable = sample_locus_matches(
-        males, "L", mu_all=mu_all, n_copies=2, n_samples=100_000, rng=rng
+        males, "L", mu=0.1, n_copies=2, n_samples=100_000, rng=rng
     )
     assert usable
     assert not excluded.any()
@@ -356,7 +350,7 @@ def test_sample_locus_matches_flags_typed_mismatch_as_excluded():
         Male(male_id=2, generation=1, father_id=1,  alleles={"M1": 14}),  # 1-step mismatch
     ]
     matches, excluded, usable = sample_locus_matches(
-        males, "M1", mu_all=0.1, n_samples=100
+        males, "M1", mu=0.1, n_samples=100
     )
     assert usable
     assert excluded.tolist() == [False, True]
@@ -463,34 +457,35 @@ def test_at_least_one_match_reproducible_with_seed():
 
 
 # ---------------------------------------------------------------------------
-# Mutation-rate convention: mu is the overall per-locus (all-copy) rate
-# at every public entry point.
+# Mutation-rate convention: mu is the per-copy rate at every public entry
+# point, used unchanged for every copy.
 # ---------------------------------------------------------------------------
 
-def test_at_least_one_match_multicopy_uses_all_copy_rate():
+def test_at_least_one_match_multicopy_uses_per_copy_rate():
     # One untyped son of a {11,12} suspect: i-MP is just his MP, which
-    # must equal compute_match_probs_multicopy at the same mu_all.
+    # must equal compute_match_probs_multicopy at the same per-copy mu
+    # (0.8125 for mu=0.1, Section 2.3 crossing-term example).
     males = [
         Male(male_id=1, generation=0, father_id=-1, alleles={"L": (11, 12)}),
         Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
     ]
-    mu_all = 0.19
-    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=mu_all)
-    res = compute_at_least_one_match(males, ["L"], mu=mu_all, n_samples=200_000, seed=1)
+    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu=0.1)
+    assert mp[1] == pytest.approx(0.8125, abs=1e-12)
+    res = compute_at_least_one_match(males, ["L"], mu=0.1, n_samples=200_000, seed=1)
     assert res.candidate_probs[2] == pytest.approx(mp[1], rel=1e-12)
     assert abs(res.i_mp - mp[1]) < 5 * res.se
 
 
-def test_multicopy_two_step_fraction_preserved_per_copy():
-    # Homozygous {12,12} suspect -> untyped son: MP = (1 - mu_pc)^2, where
-    # mu_pc = 1 - (1 - mu_all)^(1/c) is the per-copy *total* rate,
-    # independent of how it is split into one- and two-step mutations.
+def test_multicopy_two_step_split_per_copy():
+    # Homozygous {12,12} suspect -> untyped son: MP = (1 - mu1 - mu2)^2
+    # with the per-copy rates used unchanged, however the total per-copy
+    # rate 0.1 is split into one- and two-step mutations.
     males = [
         Male(male_id=1, generation=0, father_id=-1, alleles={"L": (12, 12)}),
         Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
     ]
-    mu_all, f = 0.19, 0.3
+    mu, f = 0.1, 0.3
     mp, _ = compute_match_probs_multicopy(
-        males, "L", n_copies=2, mu_all=mu_all * (1 - f), mu2_all=mu_all * f,
+        males, "L", n_copies=2, mu=mu * (1 - f), mu2=mu * f,
     )
     assert mp[1] == pytest.approx(0.81, rel=1e-12)
