@@ -59,20 +59,14 @@ unordered allele combination (e.g. `10;11`). Internally each male's
 genotype is an ordered copy vector, and an observation is consistent with
 every ordering of it. Mutation acts independently on each copy.
 
-`mu` is always the **overall rate of the locus** (all copies together),
-as mutation rates for multi-copy markers are usually reported. It is
-converted automatically to the per-copy rate
-
-```
-mu_copy = 1 - (1 - mu)^(1/c)
-```
-
-and then split into one- and two-step mutations with the same fraction
-`f`. The number of copies `c` is detected from the input data. This
-convention is the same for `compute_match_probs_fast`,
+`mu` is always the **per-copy rate** and is applied unchanged to every
+copy (split into one- and two-step mutations with the fraction `f`); no
+conversion takes place. The number of copies `c` is detected from the
+input data. This convention is the same for `compute_match_probs_fast`,
 `compute_match_probs_multicopy`, `compute_at_least_one_match` and the
 CLI's `--mu`; for single-copy loci (`c = 1`) `mu` is simply the rate per
-meiosis.
+meiosis. For information, the CLI also prints the corresponding all-copy
+rate of the locus, `mu_all = 1 - (1 - mu)^c`.
 
 ## Repository contents
 
@@ -119,8 +113,8 @@ python cli.py Pedigrees/D01.csv --mu 0.1 --out results.csv
 
 Arguments:
 - `PEDIGREE_CSV` - path to the input pedigree CSV file.
-- `--mu` - overall mutation rate per locus and meiosis (default: `0.1`);
-  for multi-copy loci this is the all-copy rate (see *Multi-copy markers*).
+- `--mu` - mutation rate per meiosis (default: `0.1`); for multi-copy
+  loci this is the per-copy rate (see *Multi-copy markers*).
 - `--two-step-frac` - fraction of mutations that are two-step (default: `0`).
 - `--out` - optional path to write results as CSV instead of only printing them.
 - `--at-least-one` - also compute i-MP, the probability that at least one

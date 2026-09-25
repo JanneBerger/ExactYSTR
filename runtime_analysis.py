@@ -352,7 +352,7 @@ def overlay_n(ns):
     def build_mc(n, seed):
         males = generate_mixed_pedigree(n, 30, EXTRA_BRANCHING, [], [LOCUS], MC_COPIES, seed=seed)
         return lambda: compute_match_probs_multicopy(
-            males, LOCUS, MC_COPIES, mu_all=MU, minall=MINALL, maxall=MAXALL
+            males, LOCUS, MC_COPIES, mu=MU, minall=MINALL, maxall=MAXALL
         )
     return run_extra_series(ns, build_mc)
 
@@ -361,7 +361,7 @@ def overlay_u(us, n=200):
     def build_mc(u, seed):
         males = generate_mixed_pedigree(n, u, EXTRA_BRANCHING, [], [LOCUS], MC_COPIES, seed=seed)
         return lambda: compute_match_probs_multicopy(
-            males, LOCUS, MC_COPIES, mu_all=MU, minall=MINALL, maxall=MAXALL
+            males, LOCUS, MC_COPIES, mu=MU, minall=MINALL, maxall=MAXALL
         )
     return run_extra_series(us, build_mc)
 
@@ -373,7 +373,7 @@ def overlay_A(As, n=200, u=50):
         males = generate_mixed_pedigree(n, u, EXTRA_BRANCHING, [], [LOCUS], MC_COPIES,
                                          suspect_allele=centre, seed=seed)
         return lambda: compute_match_probs_multicopy(
-            males, LOCUS, MC_COPIES, mu_all=MU, minall=mn, maxall=mx
+            males, LOCUS, MC_COPIES, mu=MU, minall=mn, maxall=mx
         )
     return run_extra_series(As, build_mc)
 
@@ -384,7 +384,7 @@ def overlay_L(Ls, n=50, u=25):
         males = generate_mixed_pedigree(n, u, EXTRA_BRANCHING, [], loci, MC_COPIES, seed=seed)
         def call():
             for loc in loci:
-                compute_match_probs_multicopy(males, loc, MC_COPIES, mu_all=MU,
+                compute_match_probs_multicopy(males, loc, MC_COPIES, mu=MU,
                                                minall=MINALL, maxall=MAXALL)
         return call
     return run_extra_series(Ls, build_mc)
