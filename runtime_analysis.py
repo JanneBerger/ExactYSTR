@@ -21,15 +21,14 @@ Each experiment is run for three pedigree topologies:
     wide3   — each male has exactly three sons
     wide5   — each male has exactly five sons
 
-On top of these three lines, each panel also shows two overlay series
-along the same x-axis, using a single fixed topology (wide3):
-    multi-copy         — same computation, but for one c=2 locus
-                          (compute_match_probs_multicopy) instead of one
-                          single-copy locus
-    at least one match — the i-MP sampling estimator
-                          (compute_at_least_one_match) over the same
-                          pedigree/loci, with a reduced sample count so
-                          its runtime is on a comparable scale
+On top of these three lines, each panel also shows a multi-copy overlay
+series along the same x-axis, using a single fixed topology (wide3): the
+same computation, but for one c=2 locus (compute_match_probs_multicopy)
+instead of one single-copy locus.
+
+A fifth, separate panel shows the i-MP sampling estimator
+(compute_at_least_one_match, default n_samples=200,000) against the
+number of untyped candidates (n = 200, wide3), on its own scale.
 
 The script imports directly from ystr_pedigree.py (GitHub implementation).
 Place this file in the same directory as ystr_pedigree.py, or add its
@@ -39,7 +38,7 @@ Dependencies: numpy, matplotlib
 Usage:
     python runtime_analysis.py
 Output:
-    runtime_analysis.png/.pdf/.svg  (publication-quality 4-panel figure,
+    runtime_analysis.png/.pdf/.svg  (publication-quality 5-panel figure,
     raster + vector formats)
 """
 

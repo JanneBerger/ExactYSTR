@@ -12,12 +12,13 @@ Usage
 The pedigree CSV must contain columns:
     male_id, generation, father_id, allele_<LOCUS>, ...
 
-See examples/example_pedigree.csv for the expected format.
+See Pedigrees/D01.csv for an example of the expected format.
 All loci use a fixed allele range of [3, 30].
 
---mu is always the per-copy mutation rate (mu_pc).  For multi-copy loci
-the per-locus rate mu_all = 1-(1-mu)^c is derived automatically and shown
-in the console output.
+--mu is the overall mutation rate of a locus per meiosis (for multi-copy
+loci: the all-copy rate mu_all, as usually reported for the locus as a
+whole).  For multi-copy loci the per-copy rate mu = 1-(1-mu_all)^(1/c) is
+derived automatically and shown in the console output.
 """
 
 import argparse
@@ -51,9 +52,9 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_MU,
         help=(
-            "Per-copy mutation rate (mu_pc). For multi-copy loci the "
-            "per-locus rate mu_all = 1-(1-mu)^c is derived automatically. "
-            "Default: %(default)s."
+            "Overall mutation rate per locus and meiosis. For multi-copy "
+            "loci this is the all-copy rate mu_all; the per-copy rate "
+            "1-(1-mu_all)^(1/c) is derived automatically."
         ),
     )
     parser.add_argument(
@@ -106,7 +107,7 @@ def run(
 ) -> None:
     males, loci = load_pedigree_from_csv(pedigree_path)
     print(f"Loaded {len(males)} males, {len(loci)} loci from '{pedigree_path}'")
-    print(f"Mutation rate:  mu = {mu}  (per copy)")
+    print(f"Mutation rate:  mu = {mu}  (per locus, all copies)")
     if two_step_frac:
         print(f"Two-step fraction: {two_step_frac}")
     print(f"Allele range:  [{MINALL}, {MAXALL}]\n")
@@ -121,10 +122,11 @@ def run(
     for locus in loci:
         c = _infer_copies(males, locus)
 
-        # mu is per-copy; derive per-locus all-copy rate for this locus
-        mu_all = 1.0 - (1.0 - mu) ** c
-        lmu1 = mu_all * (1.0 - two_step_frac)
-        lmu2 = mu_all * two_step_frac
+        # mu is the overall per-locus rate; the per-copy rate is derived
+        # inside the multi-copy sweep (shown below for information)
+        mu_pc = 1.0 - (1.0 - mu) ** (1.0 / c)
+        lmu1 = mu * (1.0 - two_step_frac)
+        lmu2 = mu * two_step_frac
 
         t0 = time.perf_counter()
         match_probs, average = compute_match_probs_fast(males, locus, lmu1, mu2=lmu2)
@@ -138,7 +140,7 @@ def run(
         n_loci_used += 1
         t_str = f"{elapsed*1000:.1f} ms" if elapsed < 1 else f"{elapsed:.3f} s"
         if c > 1:
-            print(f"[{locus}]  {c} copies  →  mu_all = {mu_all:.6g} (= 1-(1-{mu})^{c})  [{t_str}]")
+            print(f"[{locus}]  {c} copies  →  per-copy mu = {mu_pc:.6g} (= 1-(1-{mu})^(1/{c}))  [{t_str}]")
             print(f"    average MP = {average:.6f}")
         else:
             print(f"[{locus}]  average MP = {average:.6f}  [{t_str}]")

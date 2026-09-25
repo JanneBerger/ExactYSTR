@@ -7,8 +7,8 @@ in `ystr_pedigree.py`) against an exact, non-sampling reference, for the
 single-copy A-E/G example pedigrees (A01, B01, C01, C02, D01, D02, E01,
 E02, G01) and their two-copy (DYS385-like) analogues (A01_mc1, A01_mc2,
 B01_mc, C01_mc, C02_mc, F01_mc). `compute_at_least_one_match[_exact]`
-already treat `mu` as a per-copy rate and auto-detect each locus's copy
-count, so the same comparison loop below handles single- and multi-copy
+both treat `mu` as the overall per-locus (all-copy) rate and auto-detect
+each locus's copy count, so the same comparison loop below handles single- and multi-copy
 pedigrees alike.
 
 `ystr_pedigree.py` ships the sampling method only (Section 3.2 of the
@@ -90,9 +90,8 @@ def compute_at_least_one_match_exact(
 
     for locus in loci:
         c = _infer_copies(males, locus)
-        mu_all = 1.0 - (1.0 - mu) ** c
-        lmu1 = mu_all * (1.0 - two_step_frac)
-        lmu2 = mu_all * two_step_frac
+        lmu1 = mu * (1.0 - two_step_frac)
+        lmu2 = mu * two_step_frac
 
         ctx = _multicopy_inside_pass(males, locus, c, lmu1, lmu2, minall, maxall)
         if ctx is None:

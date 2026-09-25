@@ -35,27 +35,56 @@ tuning parameter, no convergence criterion. See `--at-least-one` below.
 
 ### Mutation model
 
-A one-step symmetric stepwise mutation model is used for each meiosis:
+A symmetric stepwise mutation model with one- and two-step mutations is
+used for each meiosis:
 
 ```
-p(j -> k) = 1 - mu   if k == j
-            mu / 2   if |k - j| == 1
-            0        otherwise
+p(j -> k) = 1 - mu1 - mu2   if k == j
+            mu1 / 2         if |k - j| == 1
+            mu2 / 2         if |k - j| == 2
+            0               otherwise
 ```
 
-where `mu` is the mutation rate per meiosis (default `0.1`), and alleles
-are integers in a fixed range (default `[3, 30]`).
+The user supplies the overall mutation rate `mu = mu1 + mu2` (default
+`0.1`) and a two-step fraction `f` (`--two-step-frac`, default `0`), from
+which `mu1 = (1 - f) * mu` and `mu2 = f * mu`; `f = 0` gives the classic
+one-step model. Alleles are integers in a fixed range (default `[3, 30]`);
+at the range boundaries the stay probability absorbs the mass that would
+leave the range.
+
+### Multi-copy markers
+
+Loci such as DYS385 occur in `c > 1` copies; the lab reports only the
+unordered allele combination (e.g. `10;11`). Internally each male's
+genotype is an ordered copy vector, and an observation is consistent with
+every ordering of it. Mutation acts independently on each copy.
+
+`mu` is always the **overall rate of the locus** (all copies together),
+as mutation rates for multi-copy markers are usually reported. It is
+converted automatically to the per-copy rate
+
+```
+mu_copy = 1 - (1 - mu)^(1/c)
+```
+
+and then split into one- and two-step mutations with the same fraction
+`f`. The number of copies `c` is detected from the input data. This
+convention is the same for `compute_match_probs_fast`,
+`compute_match_probs_multicopy`, `compute_at_least_one_match` and the
+CLI's `--mu`; for single-copy loci (`c = 1`) `mu` is simply the rate per
+meiosis.
 
 ## Repository contents
 
 | File | Description |
 |---|---|
-| `ystr_pedigree.py` | Core algorithm: pedigree data structures, CSV loading, mutation model, `compute_match_probs_fast` (linear-time inside-outside version), and `compute_at_least_one_match` (i-MP via exact sampling from the peeling messages). |
+| `ystr_pedigree.py` | Core algorithm: pedigree data structures, CSV loading, mutation model, `compute_match_probs_fast` (linear-time inside-outside version, dispatching to `compute_match_probs_multicopy` for multi-copy loci), and `compute_at_least_one_match` (i-MP via exact sampling from the peeling messages). |
 | `cli.py` | Command-line interface for running the calculator on a pedigree CSV file. |
-| `runtime_analysis.py` | Empirical runtime benchmarking script that measures how `compute_match_probs_fast` scales with pedigree size, number of untyped males, allele range, number of loci, and number of multi-copy loci, and plots the results. |
-| `compare_exact_vs_sampled.py` | Validates the shipped i-MP sampling estimator against an exact, non-sampling reference (full inclusion-exclusion) for the example pedigrees. |
-| `derive_multicopy_analytic.py` | Independently re-derives closed-form match-probability formulas for two-copy analogues of pedigrees A-E and cross-checks them against `compute_match_probs_multicopy`. |
-| `Pedigrees/` | Example pedigree CSV files: single-copy `A01.csv` … `F01.csv`, and their two-copy (DYS385-like) analogues `MCA01.csv` … `MCE02.csv`. |
+| `runtime_analysis.py` | Empirical runtime benchmarking script that measures how `compute_match_probs_fast` scales with pedigree size, number of untyped males, allele range and number of loci (plus a two-copy overlay series per panel), and how the i-MP sampling estimator scales with the number of untyped candidates, and plots the results. |
+| `compare_exact_vs_sampled.py` | Validates the shipped i-MP sampling estimator against an exact, non-sampling reference (full inclusion-exclusion) for the example pedigrees; only pedigrees with at least two candidates are reported. |
+| `derive_multicopy_analytic.py` | Independently re-derives closed-form match-probability formulas for the two-copy pedigrees `A01_mc1`, `A01_mc2`, `B01_mc`, `C01_mc` and `C02_mc` and cross-checks them against `compute_match_probs_multicopy`. |
+| `tests/` | `pytest` test suite. |
+| `Pedigrees/` | Example pedigree CSV files: single-copy `A01`, `B01`, `C01`, `C02`, `D01`, `D02`, `E01`, `E02` and the realistic 15-male, 30-locus `G01`; two-copy (DYS385-like) `A01_mc1`, `A01_mc2`, `B01_mc`, `C01_mc`, `C02_mc` and `F01_mc`. |
 | `LICENSE.txt` | MIT license. |
 
 ## Pedigree CSV format
@@ -67,7 +96,7 @@ Each pedigree is a CSV file with one row per male:
 | `male_id` | Unique integer identifier. |
 | `generation` | 0-based generation index (0 = suspect / most recent common ancestor). |
 | `father_id` | `male_id` of the father, or `-1` for the root. |
-| `allele_<LOCUS>` | Allele value at locus `LOCUS`. Use `0` for an untyped individual. Add one such column per locus. |
+| `allele_<LOCUS>` | Allele value at locus `LOCUS`. Use `0` for an untyped individual. For a multi-copy locus, give the alleles semicolon-separated (e.g. `10;11`). Add one such column per locus. |
 
 Example (`Pedigrees/D01.csv`), a single locus `M1` with two untyped males
 between the suspect and a typed descendant:
@@ -90,7 +119,9 @@ python cli.py Pedigrees/D01.csv --mu 0.1 --out results.csv
 
 Arguments:
 - `PEDIGREE_CSV` - path to the input pedigree CSV file.
-- `--mu` - mutation rate per meiosis (default: `0.1`).
+- `--mu` - overall mutation rate per locus and meiosis (default: `0.1`);
+  for multi-copy loci this is the all-copy rate (see *Multi-copy markers*).
+- `--two-step-frac` - fraction of mutations that are two-step (default: `0`).
 - `--out` - optional path to write results as CSV instead of only printing them.
 - `--at-least-one` - also compute i-MP, the probability that at least one
   untyped, non-excluded male anywhere in the pedigree matches the suspect
@@ -104,20 +135,23 @@ probability across all untyped males, plus the per-male match
 probability.
 
 ```bash
-python cli.py Pedigrees/F01.csv --mu 0.1 --at-least-one --n-samples 200000 --seed 42
+python cli.py Pedigrees/G01.csv --mu 0.1 --at-least-one --n-samples 200000 --seed 42
 ```
 
 ```
-=== At least one match, i-MP (over 30 loci, 1.8 s) ===
-    i-MP = 0.008360  (se = 4.07e-04, n_samples = 50000)
+=== At least one match, i-MP (over 30 loci, 6.191 s) ===
+    i-MP = 0.009430  (se = 2.16e-04, n_samples = 200000)
     candidates: 11
 ```
 
-If a match already exists in the observed data (a typed, matching
-relative), i-MP is reported as exactly `1.0`. If every candidate's
+Only untyped males are i-MP candidates: a male typed at any of the loci
+used is excluded, whether or not his genotype matches the suspect's,
+because his match status is then observed rather than uncertain. If there
+are no candidates, i-MP is reported as `0`. If every candidate's
 individual match probability is far below `1/n_samples`, the sampling
-estimate rounds to zero and the CLI instead reports the exact first-order
-approximation `i-MP ≈ Σ_i P_i` (Section 3.2 of the technical note).
+estimate rounds to zero and the CLI instead reports the first-order
+approximation `i-MP ≈ Σ_i P_i` (Section 3.2 of the technical note), with
+no standard error.
 
 For the special case where all candidates are conditionally independent
 given the typed suspect (e.g. two sons with no shared untyped ancestor,
@@ -136,8 +170,19 @@ python runtime_analysis.py
 Requires `numpy` and `matplotlib`. Benchmarks `compute_match_probs_fast`
 across pedigree size, number of untyped males, allele range, and number
 of loci, for three pedigree topologies (linear chain, and branching
-factors of 3 and 5), and saves a 4-panel figure to
-`runtime_analysis.png`.
+factors of 3 and 5), each panel with an additional two-copy series
+(branching factor 3). A fifth panel shows the runtime of the i-MP
+sampling estimator (`n_samples = 200000`) against the number of untyped
+candidates. Runtimes are wall-clock (`time.perf_counter`). The figure is
+saved to `runtime_analysis.png` (plus `.pdf` and `.svg`).
+
+### Validation
+
+```bash
+python derive_multicopy_analytic.py          # closed-form multi-copy checks
+python compare_exact_vs_sampled.py --mu 0.1 --n-samples 1000000
+python -m pytest tests
+```
 
 ## Requirements
 
@@ -145,6 +190,7 @@ factors of 3 and 5), and saves a 4-panel figure to
 - `numpy` (required by `ystr_pedigree.py` and `cli.py`, for multi-copy markers and i-MP sampling)
 - `matplotlib` (only for `runtime_analysis.py`)
 - `sympy` (only for `derive_multicopy_analytic.py`)
+- `pytest` (only for the test suite)
 
 ## License
 

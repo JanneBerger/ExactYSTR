@@ -460,3 +460,37 @@ def test_at_least_one_match_reproducible_with_seed():
     res_a = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=5000, seed=123)
     res_b = compute_at_least_one_match(males, ["M1"], mu=0.1, n_samples=5000, seed=123)
     assert res_a.i_mp == res_b.i_mp
+
+
+# ---------------------------------------------------------------------------
+# Mutation-rate convention: mu is the overall per-locus (all-copy) rate
+# at every public entry point.
+# ---------------------------------------------------------------------------
+
+def test_at_least_one_match_multicopy_uses_all_copy_rate():
+    # One untyped son of a {11,12} suspect: i-MP is just his MP, which
+    # must equal compute_match_probs_multicopy at the same mu_all.
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"L": (11, 12)}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
+    ]
+    mu_all = 0.19
+    mp, _ = compute_match_probs_multicopy(males, "L", n_copies=2, mu_all=mu_all)
+    res = compute_at_least_one_match(males, ["L"], mu=mu_all, n_samples=200_000, seed=1)
+    assert res.candidate_probs[2] == pytest.approx(mp[1], rel=1e-12)
+    assert abs(res.i_mp - mp[1]) < 5 * res.se
+
+
+def test_multicopy_two_step_fraction_preserved_per_copy():
+    # Homozygous {12,12} suspect -> untyped son: MP = (1 - mu_pc)^2, where
+    # mu_pc = 1 - (1 - mu_all)^(1/c) is the per-copy *total* rate,
+    # independent of how it is split into one- and two-step mutations.
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"L": (12, 12)}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
+    ]
+    mu_all, f = 0.19, 0.3
+    mp, _ = compute_match_probs_multicopy(
+        males, "L", n_copies=2, mu_all=mu_all * (1 - f), mu2_all=mu_all * f,
+    )
+    assert mp[1] == pytest.approx(0.81, rel=1e-12)
