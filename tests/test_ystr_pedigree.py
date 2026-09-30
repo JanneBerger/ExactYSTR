@@ -13,6 +13,8 @@ import numpy as np
 import pytest
 
 from ystr_pedigree import (
+    MAXALL,
+    MINALL,
     Male,
     compute_at_least_one_match,
     compute_match_probs_fast,
@@ -489,3 +491,36 @@ def test_multicopy_two_step_split_per_copy():
         males, "L", n_copies=2, mu=mu * (1 - f), mu2=mu * f,
     )
     assert mp[1] == pytest.approx(0.81, rel=1e-12)
+
+
+@pytest.mark.parametrize("allele", [MINALL, MINALL + 1, MAXALL - 1, MAXALL])
+@pytest.mark.parametrize("mu2", [0.0, 0.03])
+def test_boundary_alleles_fast_matches_multicopy(allele, mu2):
+    # Near MINALL/MAXALL, mutations that would leave the range are added to
+    # the stay probability. The single-copy fast path must agree with the
+    # multi-copy path (which uses _build_T) run with c = 1.
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"L": allele}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
+        Male(male_id=3, generation=1, father_id=1,  alleles={"L": allele}),
+        Male(male_id=4, generation=2, father_id=2,  alleles={"L": 0}),
+    ]
+    fast, fast_avg = compute_match_probs_fast(males, "L", mu=0.1, mu2=mu2)
+    mc, mc_avg = compute_match_probs_multicopy(
+        males, "L", n_copies=1, mu=0.1, mu2=mu2,
+    )
+    assert fast.keys() == mc.keys()
+    for i in fast:
+        assert fast[i] == pytest.approx(mc[i], rel=1e-12)
+    assert fast_avg == pytest.approx(mc_avg, rel=1e-12)
+
+
+def test_boundary_allele_stay_absorbs_leaving_mass():
+    # Suspect at MINALL, one untyped son: a one-step mutation can only go
+    # up, so P(son matches) = 1 - mu/2 rather than 1 - mu.
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"L": MINALL}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
+    ]
+    mp, _ = compute_match_probs_fast(males, "L", mu=0.1)
+    assert mp[1] == pytest.approx(0.95, rel=1e-12)
