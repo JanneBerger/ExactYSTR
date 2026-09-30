@@ -49,8 +49,11 @@ The user supplies the overall mutation rate `mu = mu1 + mu2` (default
 `0.1`) and a two-step fraction `f` (`--two-step-frac`, default `0`), from
 which `mu1 = (1 - f) * mu` and `mu2 = f * mu`; `f = 0` gives the classic
 one-step model. Alleles are integers in a fixed range (default `[3, 30]`);
-at the range boundaries the stay probability absorbs the mass that would
-leave the range.
+at the range boundaries a mutation step that would leave the range is
+reflected inward, so every allele mutates with the same total rate `mu`:
+`p(minall -> minall-1) = p(maxall -> maxall+1) = 0` and
+`p(minall -> minall+1) = p(maxall -> maxall-1) = mu1`; likewise for
+two-step mutations, e.g. `p(minall -> minall+2) = p(minall+1 -> minall+3) = mu2`.
 
 ### Multi-copy markers
 

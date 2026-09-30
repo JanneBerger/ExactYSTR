@@ -7,6 +7,7 @@ Focus areas:
 """
 
 import glob
+import itertools
 import os
 
 import numpy as np
@@ -16,6 +17,7 @@ from ystr_pedigree import (
     MAXALL,
     MINALL,
     Male,
+    _build_T,
     compute_at_least_one_match,
     compute_match_probs_fast,
     compute_match_probs_multicopy,
@@ -496,8 +498,8 @@ def test_multicopy_two_step_split_per_copy():
 @pytest.mark.parametrize("allele", [MINALL, MINALL + 1, MAXALL - 1, MAXALL])
 @pytest.mark.parametrize("mu2", [0.0, 0.03])
 def test_boundary_alleles_fast_matches_multicopy(allele, mu2):
-    # Near MINALL/MAXALL, mutations that would leave the range are added to
-    # the stay probability. The single-copy fast path must agree with the
+    # Near MINALL/MAXALL, mutation steps that would leave the range are
+    # reflected inward. The single-copy fast path must agree with the
     # multi-copy path (which uses _build_T) run with c = 1.
     males = [
         Male(male_id=1, generation=0, father_id=-1, alleles={"L": allele}),
@@ -515,12 +517,96 @@ def test_boundary_alleles_fast_matches_multicopy(allele, mu2):
     assert fast_avg == pytest.approx(mc_avg, rel=1e-12)
 
 
-def test_boundary_allele_stay_absorbs_leaving_mass():
-    # Suspect at MINALL, one untyped son: a one-step mutation can only go
-    # up, so P(son matches) = 1 - mu/2 rather than 1 - mu.
-    males = [
-        Male(male_id=1, generation=0, father_id=-1, alleles={"L": MINALL}),
-        Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
+def test_boundary_allele_one_step_is_reflected():
+    # Suspect at MINALL / MAXALL, one untyped son: the step out of range is
+    # reflected inward, so the allele still mutates with total rate mu and
+    # P(son matches) = 1 - mu.
+    for allele in (MINALL, MAXALL):
+        males = [
+            Male(male_id=1, generation=0, father_id=-1, alleles={"L": allele}),
+            Male(male_id=2, generation=1, father_id=1,  alleles={"L": 0}),
+        ]
+        mp, _ = compute_match_probs_fast(males, "L", mu=0.1)
+        assert mp[1] == pytest.approx(0.9, rel=1e-12)
+
+
+def test_build_T_boundary_rows():
+    mu1, mu2 = 0.08, 0.02
+    T = _build_T(mu1, 6, mu2)
+    np.testing.assert_allclose(T.sum(axis=1), 1.0)
+    np.testing.assert_allclose(np.diag(T), 1.0 - mu1 - mu2)
+    # minall: -1 reflected to +1, -2 reflected to +2
+    np.testing.assert_allclose(T[0], [0.9, mu1, mu2, 0, 0, 0])
+    # minall+1: -2 reflected to +2
+    np.testing.assert_allclose(T[1], [mu1 / 2, 0.9, mu1 / 2, mu2, 0, 0])
+    # maxall and maxall-1 mirror these
+    np.testing.assert_allclose(T[5], T[0][::-1])
+    np.testing.assert_allclose(T[4], T[1][::-1])
+
+
+def _brute_force_match_probs(males, locus, c, mu1, mu2, minall, maxall):
+    """Match probabilities by enumerating every joint ordered state."""
+    A = maxall - minall + 1
+    T = _build_T(mu1, A, mu2)
+    idx = {m.male_id: i for i, m in enumerate(males)}
+    geno = []
+    for m in males:
+        a = m.alleles[locus]
+        a = a if isinstance(a, tuple) else (a,)
+        geno.append(None if all(v == 0 for v in a) else tuple(sorted(a)))
+    states = [
+        list(itertools.product(range(A), repeat=c)) if g is None
+        else sorted(set(itertools.permutations([v - minall for v in g])))
+        for g in geno
     ]
-    mp, _ = compute_match_probs_fast(males, "L", mu=0.1)
-    assert mp[1] == pytest.approx(0.95, rel=1e-12)
+    suspect = set(itertools.permutations([v - minall for v in geno[0]]))
+    total = 0.0
+    joint = {i: 0.0 for i, g in enumerate(geno) if g is None}
+    for assign in itertools.product(*states):
+        w = 1.0
+        for i, m in enumerate(males):
+            if m.father_id in idx:
+                xf = assign[idx[m.father_id]]
+                for a in range(c):
+                    w *= T[xf[a], assign[i][a]]
+        total += w
+        for i in joint:
+            if assign[i] in suspect:
+                joint[i] += w
+    return {i: v / total for i, v in joint.items()}
+
+
+@pytest.mark.parametrize("c, suspect, typed1, typed2", [
+    (1, 10, 12, 11),                    # suspect at minall
+    (1, 11, 13, 12),                    # suspect at minall+1
+    (1, 15, 13, 14),                    # suspect at maxall
+    (2, (10, 11), (11, 13), (12, 12)),  # multi-copy near minall
+    (2, (14, 15), (13, 15), (12, 14)),  # multi-copy near maxall
+])
+def test_boundary_reflection_matches_brute_force(c, suspect, typed1, typed2):
+    # Narrow range [10, 15] so the reflected boundary steps matter
+    # everywhere. With two-step mutations and at least 6 alleles the
+    # reflected kernel is not reversible, so the outside pass is only
+    # correct with T.T; the typed sons hanging off the untyped line
+    # 2 -> 3 -> 5 make that visible in male 5's match probability.
+    minall, maxall, mu1, mu2 = 10, 15, 0.08, 0.02
+    unt = 0 if c == 1 else (0, 0)
+    males = [
+        Male(male_id=1, generation=0, father_id=-1, alleles={"L": suspect}),
+        Male(male_id=2, generation=1, father_id=1,  alleles={"L": unt}),
+        Male(male_id=3, generation=2, father_id=2,  alleles={"L": unt}),
+        Male(male_id=4, generation=2, father_id=2,  alleles={"L": typed1}),
+        Male(male_id=5, generation=3, father_id=3,  alleles={"L": unt}),
+        Male(male_id=6, generation=3, father_id=3,  alleles={"L": typed2}),
+    ]
+    expected = _brute_force_match_probs(males, "L", c, mu1, mu2, minall, maxall)
+    mc, _ = compute_match_probs_multicopy(
+        males, "L", n_copies=c, mu=mu1, mu2=mu2, minall=minall, maxall=maxall,
+    )
+    fast, _ = compute_match_probs_fast(
+        males, "L", mu1, mu2=mu2, minall=minall, maxall=maxall,
+    )
+    for got in (mc, fast):
+        assert got.keys() == expected.keys()
+        for i in expected:
+            assert got[i] == pytest.approx(expected[i], rel=1e-12)
