@@ -590,7 +590,8 @@ def compute_match_probs_fast(
         Two-step mutation rate per meiosis (default: 0).
         For multi-copy loci also the per-copy rate.
     minall, maxall:
-        Inclusive allele range (default: MINALL, MAXALL).
+        Inclusive allele range (default: MINALL, MAXALL). Mutations that
+        would leave the range are added to the stay probability.
 
     Returns
     -------
@@ -629,9 +630,11 @@ def compute_match_probs_fast(
             sons[fi].append(i)
             father[i] = fi
 
-    p            = make_stepwise_mutation_model(mu, mu2)
     allele_range = range(minall, maxall + 1)
     A            = maxall - minall + 1
+    # Same boundary-aware kernel as the multi-copy path: mutations that
+    # would leave [minall, maxall] are added to the stay probability.
+    T            = _build_T(mu, A, mu2).tolist()
 
     def idx(x: int) -> int:
         return x - minall
@@ -664,7 +667,7 @@ def compute_match_probs_fast(
             hi  = min(maxall, k_f + 2)
             acc = 0.0
             for ll in range(lo, hi + 1):
-                acc += p(k_f, ll) * beta[i][idx(ll)]
+                acc += T[idx(k_f)][idx(ll)] * beta[i][idx(ll)]
             message[i][idx(k_f)] = acc
 
     # --- outside pass (alpha), top-down ---------------------------------
@@ -707,7 +710,7 @@ def compute_match_probs_fast(
                 hi  = min(maxall, k_i + 2)
                 acc = 0.0
                 for k_f in range(lo, hi + 1):
-                    acc += p(k_f, k_i) * outside_excl_i[idx(k_f)]
+                    acc += T[idx(k_f)][idx(k_i)] * outside_excl_i[idx(k_f)]
                 alpha[i][idx(k_i)] = acc
 
     P1 = beta[0][idx(suspect)]
