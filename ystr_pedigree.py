@@ -259,19 +259,29 @@ def _build_T(mu: float, A: int, mu2: float = 0.0) -> np.ndarray:
     """Build the A×A stepwise mutation transition matrix (one- and two-step).
 
     ``T[j, k]`` is the probability that an allele at offset *j* from
-    ``win_min`` mutates to offset *k* in one meiosis.  The diagonal is set
-    so each row sums to 1 (automatically handles boundary alleles).
+    ``win_min`` mutates to offset *k* in one meiosis.
+
+    Boundary alleles: a step that would leave the allele range is
+    reflected to the step of the same size in the opposite direction, so
+    every allele mutates with total rate ``mu + mu2``.  For one-step
+    mutations this gives ``p(minall, minall-1) = p(maxall, maxall+1) = 0``
+    and ``p(minall, minall+1) = p(maxall, maxall-1) = mu``; for two-step
+    mutations e.g. ``p(minall, minall+2) = p(minall+1, minall+3) = mu2``.
+    If the reflected step also leaves the range (only for very small
+    ``A``), its mass stays on the diagonal.
+
+    The reflection makes ``T`` asymmetric at the boundaries, so the
+    downward (alpha) messages must use ``T.T``.
     """
     T = np.zeros((A, A))
     for j in range(A):
-        if j > 0:
-            T[j, j - 1] = mu / 2.0
-        if j < A - 1:
-            T[j, j + 1] = mu / 2.0
-        if j > 1:
-            T[j, j - 2] = mu2 / 2.0
-        if j < A - 2:
-            T[j, j + 2] = mu2 / 2.0
+        for d, rate in ((1, mu / 2.0), (2, mu2 / 2.0)):
+            for step in (d, -d):
+                k = j + step
+                if not 0 <= k < A:
+                    k = j - step  # reflect inward
+                if 0 <= k < A:
+                    T[j, k] += rate
         T[j, j] = 1.0 - T[j, :].sum()
     return T
 
@@ -284,8 +294,8 @@ def _compute_message(beta: np.ndarray, T: np.ndarray) -> np.ndarray:
     Uses sequential contraction over the *c* copy axes at cost
     ``O(c * A^c)`` rather than the naive ``O(A^(2c))``.
 
-    Because the SSM kernel is symmetric (``T[i,j] == T[j,i]``), this
-    same function is also used for the downward (alpha) messages.
+    The same function computes the downward (alpha) messages
+    ``Σ_xf T^(c)(xf -> y) outside[xf]`` when called with ``T.T``.
 
     Parameters
     ----------
@@ -516,10 +526,11 @@ def compute_match_probs_multicopy(
 
         for t, i in enumerate(kids):
             outside_excl_i = father_factor * prefix[t] * suffix[t + 1]
-            # By SSM symmetry T[j,k] == T[k,j], the downward message
+            # Downward message
             # alpha[i][yi] = Σ_{xf} T^c(xf→yi) * outside_excl_i[xf]
-            # equals _compute_message(outside_excl_i)[yi].
-            alpha[i] = _compute_message(outside_excl_i, T)
+            # = _compute_message(outside_excl_i, T.T)[yi]. T is not
+            # symmetric at the boundary alleles, so the transpose matters.
+            alpha[i] = _compute_message(outside_excl_i, T.T)
 
     # --- match probabilities ---
     suspect_mask = em(ctx.suspect_g)
@@ -590,8 +601,8 @@ def compute_match_probs_fast(
         Two-step mutation rate per meiosis (default: 0).
         For multi-copy loci also the per-copy rate.
     minall, maxall:
-        Inclusive allele range (default: MINALL, MAXALL). Mutations that
-        would leave the range are added to the stay probability.
+        Inclusive allele range (default: MINALL, MAXALL). Mutation steps
+        that would leave the range are reflected inward (see _build_T).
 
     Returns
     -------
@@ -632,8 +643,8 @@ def compute_match_probs_fast(
 
     allele_range = range(minall, maxall + 1)
     A            = maxall - minall + 1
-    # Same boundary-aware kernel as the multi-copy path: mutations that
-    # would leave [minall, maxall] are added to the stay probability.
+    # Same boundary-aware kernel as the multi-copy path: steps that would
+    # leave [minall, maxall] are reflected inward (see _build_T).
     T            = _build_T(mu, A, mu2).tolist()
 
     def idx(x: int) -> int:
