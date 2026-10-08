@@ -79,8 +79,8 @@ import numpy as np
 # Constants
 # ---------------------------------------------------------------------------
 
-MINALL: int   = 4      # Lower bound of allele range (inclusive)
-MAXALL: int   = 5     # Upper bound of allele range (inclusive)
+MINALL: int   = 1      # Lower bound of allele range (inclusive)
+MAXALL: int   = 30     # Upper bound of allele range (inclusive)
 DEFAULT_MU: float  = 0.1   # Default one-step mutation rate per meiosis
 DEFAULT_MU2: float = 0.0   # Default two-step mutation rate per meiosis
 
